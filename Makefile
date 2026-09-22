@@ -31,3 +31,9 @@ riscv-tests:
 clean:
 	$(RM) $(OBJECTS) $(OBJECTS:.o=.d) $(BUILD)/setsuna-sim
 -include $(OBJECTS:.o=.d)
+
+.PHONY: fpga-setup fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-flash
+fpga-setup:
+	python3 scripts/fpga/setup.py
+fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-flash:
+	python3 scripts/fpga/run.py $(patsubst fpga-%,%,$@) $(FPGA_ARGS)

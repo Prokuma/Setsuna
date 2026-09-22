@@ -4,7 +4,7 @@
 
 ## 決定した目標
 
-1. Sipeed Tang系（まずTang Nano 20Kを候補とする）で検証できる環境を整備する。
+1. Sipeed Tang系（まずTang Primer 20K + Dock）で検証できる環境を整備する。
 2. 現在のApple Silicon / ARM Macで開発・ビルド・検証できるようにする。
 3. `sim`を、教科書的な5段パイプラインを持つRV64GCエミュレータとして完成させる。
 
@@ -107,8 +107,10 @@ Kasumiでも同じテストを使用している。
 
 ## ARM Mac / Tang環境
 
-**現時点では方針の文書化まで。** ボードは接続されていない。
-ツール導入、環境構築、実機への書き込みは別途指示を受けてから実施する。
+2026-09-22、追加の指示によりTang Primer 20K + Dockの環境構築を実施。
+OSS CAD Suiteの取得・合成・書き込みをスクリプト化し、ARM MacからテストRTLの
+bitstream生成とSRAM書き込みまで確認した。手順は[fpga.md](fpga.md)を参照。
+以下は当初の計画。UARTによる結果回収とCPU本体の搭載は引き続き今後の作業。
 
 第一候補は[OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build)のdarwin-arm64版。
 Yosys、nextpnr、Apicula、openFPGALoader等を組み合わせる。
@@ -157,4 +159,5 @@ FPGA環境整備とsim開発は独立して進められる。sim完成後のRTL�
 `sim/`にC17のエミュレータ、5段パイプライン、ローダー、デバッガー、Makefile、
 公開テスト実行基盤を実装した。実装の範囲と制約は[simulator.md](simulator.md)に記載。
 乗除算・FP演算のレイテンシーは現在1 EXサイクルのモデルとし、複数サイクル化は今後の拡張点。
-`verilog/`は既存の骨組みのまま。FPGAツールの導入・実機検証は未実施。
+`verilog/`は既存の骨組みのまま。別途`fpga/tang-primer-20k/`のテストRTLで、
+ARM Macからの合成・配置配線・SRAM書き込みを確認済み。

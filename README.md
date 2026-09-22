@@ -6,7 +6,7 @@ This name from 'Yuki Setsuna' that is name of a charactors of 'Love Live! Nijiga
 ## The Goals
 - Target date: **March 2027** (updated from September 2023).
 - Establish an FPGA development and verification workflow for Sipeed Tang boards,
-  initially targeting Tang Nano 20K, on an Apple Silicon (ARM) Mac.
+  initially targeting Tang Primer 20K + Dock, on an Apple Silicon (ARM) Mac.
 - Complete `sim` as a standalone RV64GC emulator, primarily written in C, with a
   textbook five-stage pipeline (IF / ID / EX / MEM / WB).
 - Load a user-selected binary, run public RISC-V test programs, provide debugging
@@ -56,6 +56,7 @@ make deps
 | --- | --- | --- |
 | [third_party/softfloat](https://github.com/ucb-bar/berkeley-softfloat-3) | C floating-point operations with the RISC-V specialization | `a0c6494cdc11865811dec815d5c0049fba9d82a8` |
 | [third_party/riscv-tests](https://github.com/riscv-software-src/riscv-tests) | Public ISA tests, including its nested `env` dependency | `d44511022b356a341a2430cfd65f894b77c35f36` |
+| [third_party/oss-cad-suite-build](https://github.com/YosysHQ/oss-cad-suite-build) | FPGA toolchain build definitions; tools installed from checksum-pinned official releases | `1caab788c6369cf81e75fcbb44722839e94b8163` |
 
 Use `git submodule status --recursive` to inspect the checked-out revisions.
 `make deps` checks out the recorded commits; it does not follow upstream's latest
@@ -109,6 +110,28 @@ See [the simulator guide](docs/simulator.md) for dependencies, supported executi
 environment, debugging, and known limitations. The public validation baseline is
 `riscv-tests`, also used for Kasumi.
 
-`verilog/` remains a skeleton. Tang FPGA work is **planning only** until separately
-requested; no board is currently connected and no FPGA tool installation or
-hardware verification has been performed.
+## Tang Primer 20K Dock
+
+The FPGA smoke test uses the official **OSS CAD Suite 2026-09-22** release,
+pinned by platform-specific SHA-256 checksums. Setup supports ARM64/x86-64 macOS
+and Linux; ARM Mac synthesis and SRAM programming have been verified on hardware.
+Prerequisites: Git, Make, curl, and Python 3.12+ (or a version with
+`tarfile.data_filter` backported). See [the FPGA guide](docs/fpga.md) for details.
+
+```sh
+make deps
+make fpga-setup    # download, verify, and install locally under .tools/
+make fpga-doctor   # inspect actual tool versions
+make fpga-build    # test RTL, synthesize, place/route, and generate blink.fs
+make fpga-scan     # list connected USB probes
+make fpga-detect   # read the FPGA's JTAG ID
+make fpga-program # rebuild current RTL and load SRAM (volatile)
+```
+
+Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
+The test RTL cycles the six LEDs every half second. Outputs and logs are in
+`build/fpga/tang-primer-20k/`. `make fpga-flash` separately programs persistent
+Flash; it replaces the existing Flash contents and has not been hardware-tested.
+
+`verilog/` remains the CPU RTL skeleton. The board smoke test is independent,
+under `fpga/tang-primer-20k/`.
