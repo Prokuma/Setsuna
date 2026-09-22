@@ -27,8 +27,11 @@ make test-riscv
 python3 scripts/riscv_tests.py --cc /path/to/riscv64-unknown-elf-gcc --groups rv64ui rv64um
 ```
 
-取得するリビジョンは`scripts/deps.sh`で固定する。ソースは`third_party/`に置き、
-生成物とともにGit対象外とする。SoftFloatのライセンスは
+外部プロジェクトは`third_party/`以下のGit submoduleとして管理し、取得するリビジョンは
+親リポジトリーのgitlinkで固定する。`make deps`は`git submodule update --init --recursive`を
+実行し、riscv-tests内の`env`も取得する。生成物のみGit対象外とする。
+依存のビルド手順は[README](../README.md)を参照。`make softfloat`でホスト向けライブラリー、
+`make riscv-tests`でテスト用ELFのみをビルドできる。SoftFloatのライセンスは
 `third_party/softfloat/COPYING.txt`、riscv-testsは`third_party/riscv-tests/LICENSE`を参照。
 バイナリ再配布時にもそれぞれのライセンス条件を守る。
 

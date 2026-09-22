@@ -6,7 +6,7 @@ SOURCES := $(wildcard sim/*.c)
 OBJECTS := $(patsubst sim/%.c,$(BUILD)/%.o,$(SOURCES))
 SF_SOURCE := $(abspath third_party/softfloat/source)
 SF_LIBRARY := $(BUILD)/softfloat/softfloat.a
-.PHONY: all deps test test-riscv clean
+.PHONY: all deps softfloat riscv-tests test test-riscv clean
 all: $(BUILD)/setsuna-sim
 $(BUILD)/setsuna-sim: $(OBJECTS) $(SF_LIBRARY)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJECTS) $(SF_LIBRARY) -o $@
@@ -14,7 +14,8 @@ $(BUILD)/%.o: sim/%.c sim/types.h | $(BUILD)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -MMD -MP -c $< -o $@
 $(BUILD):
 	mkdir -p $@
-$(SF_LIBRARY): sim/softfloat/platform.h
+softfloat: $(SF_LIBRARY)
+$(SF_LIBRARY): sim/softfloat/platform.h $(wildcard third_party/softfloat/source/*.c third_party/softfloat/source/include/*.h third_party/softfloat/source/RISCV/*) $(wildcard third_party/softfloat/build/Linux-RISCV64-GCC/Makefile)
 	@test -f third_party/softfloat/source/include/softfloat.h || { echo 'Run make deps first'; exit 1; }
 	mkdir -p $(BUILD)/softfloat
 	cp sim/softfloat/platform.h $(BUILD)/softfloat/platform.h
@@ -25,6 +26,8 @@ test: all
 	python3 tests/test_sim.py $(BUILD)/setsuna-sim
 test-riscv: all
 	python3 scripts/riscv_tests.py --sim $(BUILD)/setsuna-sim
+riscv-tests:
+	python3 scripts/riscv_tests.py --sim $(BUILD)/setsuna-sim --build-only
 clean:
 	$(RM) $(OBJECTS) $(OBJECTS:.o=.d) $(BUILD)/setsuna-sim
 -include $(OBJECTS:.o=.d)
