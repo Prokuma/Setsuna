@@ -20,6 +20,11 @@ TESTS = {
                 'verilog/cache/cache.v', 'verilog/peripheral/gpio.v',
                 'verilog/peripheral/uart_tx.v', 'verilog/peripheral/peripheral_bus.v',
                 'verilog/setsuna.v', 'verilog/test/setsuna_tb.v'],
+    'dram_memory': ['verilog/memory/dram_boot_loader.v',
+                    'verilog/memory/memory_arbiter.v',
+                    'verilog/memory/ddr3_bus_adapter.v',
+                    'verilog/memory/dram_memory_subsystem.v',
+                    'verilog/test/dram_memory_tb.v'],
 }
 
 

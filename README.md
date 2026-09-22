@@ -121,8 +121,9 @@ stalls, memory wait states, branch flushes, and precise stop/trap behavior.
 make test-rtl
 ```
 
-The test command runs four self-checking suites (core, cache, peripherals, and
-the integrated `setsuna` top), then runs a Yosys structural check. See
+The test command runs five self-checking suites (core, cache, peripherals, the
+DDR-backed memory subsystem, and the integrated `setsuna` top), then runs a
+Yosys structural check. See
 [the RTL guide](docs/rtl.md) for the bus/MMIO contracts and the exact migration
 status. RV64GC migration is still in progress: C/A/F/D, CSR/trap execution, and
 a hardware-efficient multi-cycle M unit remain to be implemented.
@@ -139,7 +140,8 @@ Prerequisites: Git, Make, curl, and Python 3.12+ (or a version with
 make deps
 make fpga-setup    # download, verify, and install locally under .tools/
 make fpga-doctor   # inspect actual tool versions
-make fpga-build    # test RTL, synthesize, place/route, and generate blink.fs
+make fpga-synth    # test and synthesize the CPU plus DDR3 controller
+make fpga-build    # additionally place/route and generate setsuna.fs
 make fpga-scan     # list connected USB probes
 make fpga-detect   # read the FPGA's JTAG ID
 make fpga-program  # rebuild current CPU RTL and load SRAM (volatile)
@@ -147,8 +149,15 @@ make fpga-load     # load the last verified build without rebuilding
 ```
 
 Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
-The default FPGA design runs the Setsuna RV64I core from an internal ROM and rotates
-the six LEDs through GPIO MMIO. Outputs and logs are in
+The default FPGA design copies a boot image into the onboard 128 MiB DDR3 and
+runs the Setsuna RV64I core at `0x80000000`. Its demo displays a six-bit binary
+counter through GPIO MMIO. A flat little-endian binary can be selected with
+`make fpga-build FPGA_PROGRAM=program.bin`. Outputs and logs are in
 `build/fpga/tang-primer-20k/`. Use `FPGA_DESIGN=blink` or the `fpga-blink-*`
 targets for the independent toolchain smoke test. `make fpga-flash` programs
 persistent Flash; it replaces the existing Flash contents.
+
+The CPU+DDR design currently reaches nextpnr packing at 16,514 LUT4s (79%), but the pinned
+open-source nextpnr database has no placeable `DQS` BEL and stops before routing.
+The standalone blink flow remains fully placeable and programmable. See the
+FPGA guide for the exact limitation and logs.

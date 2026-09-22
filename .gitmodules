@@ -7,3 +7,6 @@
 [submodule "third_party/oss-cad-suite-build"]
 	path = third_party/oss-cad-suite-build
 	url = https://github.com/YosysHQ/oss-cad-suite-build.git
+[submodule "third_party/ddr3-tang-primer-20k"]
+	path = third_party/ddr3-tang-primer-20k
+	url = https://github.com/nand2mario/ddr3-tang-primer-20k.git

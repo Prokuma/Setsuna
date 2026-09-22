@@ -41,20 +41,41 @@ upstreamのnextpnrラッパーはユーザーの`.config/yosyshq`と`.local/shar
 実行環境がこれらを制限する場合は書き込み許可が必要。
 
 `third_party/oss-cad-suite-build`はビルド定義の参照用submoduleとして固定している。
+DDR3 PHY/controllerは`third_party/ddr3-tang-primer-20k` submoduleに固定している。
+既存checkoutでは`make deps`または次のコマンドで取得する。
+
+```sh
+git submodule update --init --recursive
+```
+
 ツール本体をローカルでソースからコンパイルする構成ではなく、公式配布アーカイブを利用する。
 ダウンロードしたバイナリーはGitに含めない。アーカイブに含まれる各ツールのライセンスに従う。
 
 ## 合成まで（ボード不要）
 
 ```sh
-make fpga-sim    # RTL単体テスト
-make fpga-build  # RTLテスト → Yosys → nextpnr-himbaechel → gowin_pack
+make fpga-sim    # DDRモデルを含むRTLテスト
+make fpga-synth  # RTLテスト → Yosys（CPU + DDR3 controller）
+make fpga-build  # さらにnextpnr-himbaechel → gowin_pack
 ```
 
 既定の`cpu`デザインは`verilog/`のSetsunaコア、各2-lineのI/D cache、GPIO peripheral、
-ボード内ROMを合成する。ROM上のRV64IプログラムがGPIO MMIOを介して6個のactive-low LEDを
-順番に点灯する。Tang Primer 20K構成では組合せRV64M演算器を除外している。
-`make fpga-sim`はROMプログラムが連続する2つのLED状態を書き込むまでを検証する。
+boot loader、16-bit DDR command adapter、Tang Primer 20Kの128 MiB DDR3 controllerを合成する。
+電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、転送完了後に
+CPU resetを解除する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
+0〜63の2進カウンタを表示する。Tang Primer 20K構成では組合せRV64M演算器を除外している。
+`make fpga-sim`はDDRモデルへのboot image転送後、LED表示が1、2、3へ進むまでを検証する。
+
+任意のflat little-endian RV64 binaryを指定できる。ロード先とentryは`0x80000000`。
+
+```sh
+make fpga-sim FPGA_PROGRAM=program.bin
+make fpga-synth FPGA_PROGRAM=program.bin
+make fpga-build FPGA_PROGRAM=program.bin
+```
+
+`demo_program.S`は既定hexの可読な命令列である。実機用`demo_program.hex`と高速な
+testbench用`demo_program_sim.hex`は待ち時間だけが異なる。
 
 独立したツールチェーン確認用blink回路も残している。
 
@@ -73,6 +94,7 @@ make fpga-blink-program
 | LED0〜5 | L16、L14、N14、N16、A13、C13 |
 | I/O電圧 | LVCMOS33 |
 | 配置配線seed | 1 |
+| DDR3 | 1 Gibit / 128 MiB、x16、program base `0x80000000` |
 
 生成物は`build/fpga/tang-primer-20k/`:
 
@@ -82,6 +104,29 @@ make fpga-blink-program
 - `timing.json`: タイミング・使用資源レポート。
 - `build-manifest.json`: ツール版、OS/CPU、入力とbitstreamのSHA-256、実行コマンド。
 - 各工程の`.log`: 失敗した工程の切り分けに使用。
+
+### 現行OSSフローのDDR3制限
+
+OSS CAD Suite 2026-09-22ではCPU+DDR3 RTLのYosys合成まで成功する。`ENABLE_M=0`、
+各2-line cache、DDR controller込みのnextpnr packing結果はLUT4 16,514 / 20,736（79%）、
+DFF 4,004 / 15,552（25%）。したがって論理容量には収まる。
+
+その後のnextpnrは次の箇所で停止する。
+
+```text
+ERROR: Unable to place cell '...u_dqs', no BELs remaining to implement cell type 'DQS'
+```
+
+現行Apiculaのsupported-primitives表ではGW2Aに`DQS`、`IDES8_MEM`、`OSER8_MEM`は存在するが、
+Apicula対応欄が空である。nextpnrのGW2A-18/18C chip databaseにも利用可能なDQS BELがなく、
+この構成の配置配線とbitstream生成は完了できない。`make fpga-synth`はこの未対応部分より前の
+再現可能な到達点として用意している。DQSを省くことはDDR3のread capture/calibrationを壊すため、
+未検証bitstreamを生成する迂回は行わない。配置配線以降はApicula/nextpnrのDQS対応、または
+別のDDR PHY backendが必要になる。
+
+controller内のvendor `DLL` primitiveも現行Yosys libraryにはないため、生成する互換ソースでは
+upstreamがDDR3-800用のnominal値として記載する25 tapへ固定している。DQS対応後にも実機で
+write leveling/read calibrationと温度・電圧marginを検証する必要がある。
 
 ```sh
 # 出力先を変える場合（空白を含むパスは直接Pythonに渡す）
@@ -106,7 +151,9 @@ SRAM書き込みは電源断で失われる。Flashの既存内容は書き換�
 再ビルドを省いて同じbitstreamを書き込む。書き込み処理自体がJTAG chainを識別するため、
 独立した`--detect`を重ねて実行しない。
 
-書き込み後、DockのLEDがCPUの実行により順番に点灯することを目視確認する。
+CPU+DDR版のbitstream生成が可能になった後は、書き込み後にDockのLEDがCPUの実行により
+2進数で増加することを目視確認する。この表示が進めばDDR初期化、boot image転送、DDRからの
+命令fetch、GPIO writeまでを一続きに確認できる。
 書き込み成功時は`program-manifest.json`と`program.log`を保存する。
 
 複数のデバッガーを接続している場合は、`fpga-scan`で得たUSBシリアルを指定する。
@@ -164,19 +211,21 @@ ioreg -p IOUSB -l -w 0 | grep -E '"(USB Product Name|idVendor|idProduct)"'
 ARM Mac、OSS CAD Suite 2026-09-22で以下を確認:
 
 - Yosys 0.69+117、nextpnr 0.11.1-31-g3edea68e、openFPGALoader v1.1.1。
-- RTLテスト成功、合成・配置配線・bitstream生成成功。27 MHz制約PASS。
+- standalone blinkはRTLテスト、合成、配置配線、bitstream生成成功。27 MHz制約PASS。
 - USB: Sipeed FTDI2232互換JTAG Debugger（VID:PID `0403:6010`）。
 - JTAG: IDCODE `0x81b`、Gowin GW2A(R)-18(C)。
 - SRAMへの書き込み100%、openFPGALoader正常終了。
-- ユーザーの目視確認により、DockのLEDが約0.5秒ごとに順番に点灯することを確認。
-- Setsuna RV64Iコア、2-line I/D cache、GPIO MMIO、内蔵ROMを含む`setsuna.fs`を生成し、
-  SRAMへの書き込み100%、openFPGALoader正常終了。CPU版のLED動作はRTL testbenchで確認。
+- 以前の内蔵ROM版Setsuna RV64IではSRAM書き込み100%とLED移動表示を実機確認済み。
+- 新しいDDR3版はRTL testbench成功、Yosys合成成功。nextpnr packingでLUT4 79%となり容量内。
+- 新しいDDR3版はnextpnrのDQS未対応により配置前で停止するため、bitstream生成・書き込みは未実施。
 - Linux/Intel Macの同じ手順用アーカイブとチェックサムは固定済みだが、各ホストでの実行は未検証。
 
 ## 参照
 
 - [OSS CAD Suiteの公式配布とインストール](https://github.com/YosysHQ/oss-cad-suite-build)
 - [ApiculaのPrimer 20K用ビルド設定](https://github.com/YosysHQ/apicula/blob/master/examples/Makefile)
+- [Apicula supported primitives](https://github.com/YosysHQ/apicula/wiki/Supported-primitives)
+- [Tang Primer 20K向けDDR3 controller](https://github.com/nand2mario/ddr3-tang-primer-20k)
 - [Sipeed公式ピン設定](https://github.com/sipeed/TangPrimer-20K-example/blob/main/Litex/sipeed_tang_primer_20k/src/sipeed_tang_primer_20k.cst)
 - [Sipeed Primer 20Kガイド](https://wiki.sipeed.com/hardware/en/tang/tang-primer-20k/primer-20k.html)
 - [openFPGALoaderの既知問題](https://trabucayre.github.io/openFPGALoader/guide/troubleshooting.html)

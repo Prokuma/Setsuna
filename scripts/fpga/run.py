@@ -17,13 +17,15 @@ BOARD = ROOT / 'fpga/tang-primer-20k'
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['doctor', 'sim', 'build', 'scan', 'detect',
+    parser.add_argument('action', choices=['doctor', 'sim', 'synth', 'build', 'scan', 'detect',
                                            'program', 'load', 'flash'])
     parser.add_argument('--design', choices=['cpu', 'blink'], default='cpu',
                         help='design to test/build/program (default: cpu)')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/fpga/tang-primer-20k')
     parser.add_argument('--serial', help='USB probe serial number, when multiple boards are connected')
     parser.add_argument('--jtag-hz', type=int, default=2500000, help='JTAG clock (default: 2500000 Hz)')
+    parser.add_argument('--program', type=Path,
+                        help='flat little-endian RV64 binary loaded at 0x80000000 (CPU design)')
     args = parser.parse_args()
     if args.jtag_hz <= 0:
         parser.error('--jtag-hz must be positive')
@@ -40,14 +42,75 @@ def main():
     # Upstream executable wrappers configure their own libraries and Python.
     history = []
 
+    if args.program and args.design != 'cpu':
+        parser.error('--program is only valid with --design cpu')
+
+    program_source = None
+    if args.design == 'cpu' and args.program:
+        program_source = args.program.expanduser().resolve()
+        if not program_source.is_file():
+            parser.error(f'program binary not found: {program_source}')
+        program_data = program_source.read_bytes()
+        if not program_data:
+            parser.error('program binary must not be empty')
+        if len(program_data) > 96 * 1024:
+            parser.error('program binary exceeds the 96 KiB boot-ROM limit')
+        padded = program_data + bytes((-len(program_data)) % 8)
+        boot_image = out / 'boot_image.hex'
+        boot_image.write_text(''.join(
+            f'{int.from_bytes(padded[offset:offset+8], "little"):016x}\n'
+            for offset in range(0, len(padded), 8)))
+        boot_words = len(padded) // 8
+    else:
+        boot_image = BOARD / 'demo_program.hex'
+        boot_words = len([line for line in boot_image.read_text().splitlines() if line.strip()])
+    boot_defines = [f'-DSETSUNA_BOOT_IMAGE="{boot_image}"',
+                    f'-DSETSUNA_BOOT_WORDS={boot_words}']
+
     rtl_sources = sorted((ROOT / 'verilog').glob('**/*.v'))
     rtl_sources = [path for path in rtl_sources if 'test' not in path.parts]
+    ddr_upstream = ROOT / 'third_party/ddr3-tang-primer-20k/src/ddr3_controller.v'
+    ddr_compatible = out / 'ddr3_controller_yosys.v'
+    ddr_text = ddr_upstream.read_text()
+    cast_marker = 'typedef logic [4:0] FIVEB;\n'
+    cast_helpers = '''typedef logic [4:0] FIVEB;
+function automatic [7:0] byte_cast(input integer value);
+    byte_cast = value[7:0];
+endfunction
+function automatic [3:0] nib_cast(input integer value);
+    nib_cast = value[3:0];
+endfunction
+function automatic [4:0] fiveb_cast(input integer value);
+    fiveb_cast = value[4:0];
+endfunction
+'''
+    if cast_marker not in ddr_text:
+        raise SystemExit('Unsupported ddr3_controller revision: typedef marker not found')
+    ddr_text = ddr_text.replace(cast_marker, cast_helpers, 1)
+    ddr_text = ddr_text.replace("BYTE'(", 'byte_cast(')
+    ddr_text = ddr_text.replace("NIB'(", 'nib_cast(')
+    ddr_text = ddr_text.replace("FIVEB'(", 'fiveb_cast(')
+    # The open-source Gowin cell library does not expose the vendor DLL cell.
+    # Keep the controller's documented DDR3-800 nominal delay (25 taps); the
+    # board memory test must validate margin on real hardware.
+    dll_pattern = (r'`ifdef SIM\n// DLL simulation takes too long.*?'
+                   r'\n`endif')
+    ddr_text, dll_replacements = re.subn(
+        dll_pattern,
+        "assign dllstep = 8'd25;\nassign dlllock = 1'b1;",
+        ddr_text, count=1, flags=re.DOTALL)
+    if dll_replacements != 1:
+        raise SystemExit('Unsupported ddr3_controller revision: DLL block not found')
+    ddr_compatible.write_text(ddr_text)
+    ddr_sources = [ddr_compatible,
+                   ROOT / 'third_party/ddr3-tang-primer-20k/src/gowin_rpll/gowin_rpll.v']
+    cpu_board_sources = [BOARD / 'tang_primer_20k_ddr3.v', BOARD / 'setsuna_soc.v']
     designs = {
         'cpu': {
             'top': 'tang_primer_20k_soc',
             'test_top': 'tang_primer_20k_soc_tb',
-            'sources': rtl_sources + [BOARD / 'setsuna_soc.v'],
-            'test_sources': rtl_sources + [BOARD / 'setsuna_soc.v', BOARD / 'setsuna_soc_tb.v'],
+            'sources': rtl_sources + ddr_sources + cpu_board_sources,
+            'test_sources': rtl_sources + cpu_board_sources + [BOARD / 'setsuna_soc_tb.v'],
             'bitstream': 'setsuna.fs',
         },
         'blink': {
@@ -89,21 +152,33 @@ def main():
 
     def simulate():
         simulation = out / (args.design + '_tb.vvp')
-        run('iverilog', '-g2012', '-s', design['test_top'], '-o', simulation,
+        defines = boot_defines if args.design == 'cpu' else []
+        run('iverilog', '-g2012', *defines, '-s', design['test_top'], '-o', simulation,
             *design['test_sources'], log='iverilog.log')
         run('vvp', simulation, log='simulation.log')
 
-    def build():
+    def build(route=True):
         tool_versions = versions()
         simulate()
         script = out / 'synth.ys'
-        script.write_text('read_verilog -sv ' +
+        define_text = ' '.join(boot_defines) + ' ' if args.design == 'cpu' else ''
+        # Yosys 0.69 re-elaborates the already-flattened top at synth_gowin's
+        # final hierarchy check when a parameterized OSER8_MEM is present.  Run
+        # through map_cells, then perform the remaining safe checks explicitly.
+        synth_suffix = (' -run begin:check' if args.design == 'cpu' else '')
+        script.write_text('read_verilog -sv ' + define_text +
                           ' '.join(json.dumps(str(source)) for source in design['sources']) + '\n' +
-                          'synth_gowin -top ' + design['top'] + ' -family gw2a\n' +
+                          'synth_gowin -top ' + design['top'] + ' -family gw2a' +
+                          synth_suffix + '\n' +
                           'setundef -zero\n' +
                           'opt_clean\n' +
+                          'stat\n' +
+                          'check -noinit\n' +
+                          'blackbox =A:whitebox\n' +
                           'write_json ' + json.dumps(str(out / 'synth.json')) + '\n')
         run('yosys', '-s', script, log='yosys.log')
+        if not route:
+            return
         run('nextpnr-himbaechel', '--json', out / 'synth.json', '--write', out / 'routed.json',
             '--device', 'GW2A-LV18PG256C8/I7', '--vopt', 'family=GW2A-18',
             '--vopt', 'cst=' + str(BOARD / 'board.cst'), '--freq', '27', '--seed', '1',
@@ -115,6 +190,9 @@ def main():
                   'design': args.design, 'top': design['top'],
                   'board': 'tangprimer20k', 'device': 'GW2A-LV18PG256C8/I7',
                   'clock_mhz': 27, 'seed': 1,
+                  'program': str(program_source) if program_source else None,
+                  'boot_image': str(boot_image), 'boot_words': boot_words,
+                  'boot_image_sha256': sha256(boot_image),
                   'sources': {str(p.relative_to(ROOT)): sha256(p) for p in
                               design['test_sources'] + [BOARD/'board.cst', LOCK, Path(__file__)]},
                   'bitstream': design['bitstream'],
@@ -129,6 +207,8 @@ def main():
         run('gowin_pack', '--help', log='gowin_pack-help.log')
     elif args.action == 'sim':
         simulate()
+    elif args.action == 'synth':
+        build(route=False)
     elif args.action == 'build':
         build()
     elif args.action == 'scan':

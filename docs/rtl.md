@@ -17,6 +17,10 @@ setsuna
                  ├── GPIO
                  ├── UART TX
                  └── data backing-memory bus
+                                  │
+                    memory arbiter / DDR3 adapter
+                                  │
+                  Tang Primer 20K DDR3 controller
 ```
 
 - `verilog/core/`: IF/ID、ID/EX、EX/MEM、MEM/WBの段間レジスターを持つ、
@@ -24,6 +28,8 @@ setsuna
 - `verilog/cache/`: 64-bit line、16-entryのdirect-mapped write-back cache。
   命令用とデータ用に同じモジュールを2個使う。
 - `verilog/peripheral/`: MMIOデコード、GPIO、UART送信。
+- `verilog/memory/`: boot image転送、I/D調停、64-bit busから16-bit DDR commandへの変換、
+  simulation用DDRモデル。
 - `verilog/setsuna.v`: コア、I/D cache、peripheralを接続するトップ。
 - `verilog/test/`: 各階層と統合トップの自己検証テストベンチ。
 
@@ -106,9 +112,13 @@ python3 scripts/rtl_test.py core cache
 - `peripheral`: GPIO read/write、UART busy/waveform、通常memoryへのforward。
 - `setsuna`: core + I/D cache + peripheralの統合実行。命令をmemoryからfetchし、
   MMIO storeでGPIOを更新して停止する。
+- `dram_memory`: boot imageをDDRモデルへ転送した後、I/D read、partial writeの
+  read-modify-write、refreshを検証する。
 - 全RTLをトップ`setsuna`として再コンパイルし、Yosysでhierarchy展開、process変換、
   structural checkを実行する。ログは`build/rtl-tests/yosys-check.log`。
 
 テストは生成物を`build/rtl-tests/`へ置き、ソースツリーを変更しない。
-この段階ではTang Primer 20KへのCPU RTLの配置配線・実機書き込みは行っていない。
+Tang Primer 20K用トップはonboard DDR3接続まで実装済みで、RTL testbenchではDDR boot後に
+GPIOの6-bit binary counterが`1, 2, 3`へ進む。現行OSS CAD SuiteではDQS primitiveを
+nextpnrが配置できないため、CPU+DDR版の実機bitstream生成は配置前で停止する。
 既存の`fpga/tang-primer-20k/blink.v`はFPGAツール経路を検証する独立した回路。
