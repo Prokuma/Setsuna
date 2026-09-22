@@ -6,7 +6,7 @@ SOURCES := $(wildcard sim/*.c)
 OBJECTS := $(patsubst sim/%.c,$(BUILD)/%.o,$(SOURCES))
 SF_SOURCE := $(abspath third_party/softfloat/source)
 SF_LIBRARY := $(BUILD)/softfloat/softfloat.a
-.PHONY: all deps softfloat riscv-tests test test-riscv clean
+.PHONY: all deps softfloat riscv-tests test test-riscv test-rtl clean
 all: $(BUILD)/setsuna-sim
 $(BUILD)/setsuna-sim: $(OBJECTS) $(SF_LIBRARY)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJECTS) $(SF_LIBRARY) -o $@
@@ -26,14 +26,21 @@ test: all
 	python3 tests/test_sim.py $(BUILD)/setsuna-sim
 test-riscv: all
 	python3 scripts/riscv_tests.py --sim $(BUILD)/setsuna-sim
+test-rtl:
+	python3 scripts/rtl_test.py
 riscv-tests:
 	python3 scripts/riscv_tests.py --sim $(BUILD)/setsuna-sim --build-only
 clean:
 	$(RM) $(OBJECTS) $(OBJECTS:.o=.d) $(BUILD)/setsuna-sim
 -include $(OBJECTS:.o=.d)
 
-.PHONY: fpga-setup fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-flash
+FPGA_DESIGN ?= cpu
+.PHONY: fpga-setup fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-load fpga-flash fpga-blink-build fpga-blink-program
 fpga-setup:
 	python3 scripts/fpga/setup.py
-fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-flash:
-	python3 scripts/fpga/run.py $(patsubst fpga-%,%,$@) $(FPGA_ARGS)
+fpga-doctor fpga-sim fpga-build fpga-scan fpga-detect fpga-program fpga-load fpga-flash:
+	python3 scripts/fpga/run.py $(patsubst fpga-%,%,$@) --design $(FPGA_DESIGN) $(FPGA_ARGS)
+fpga-blink-build:
+	python3 scripts/fpga/run.py build --design blink $(FPGA_ARGS)
+fpga-blink-program:
+	python3 scripts/fpga/run.py program --design blink $(FPGA_ARGS)

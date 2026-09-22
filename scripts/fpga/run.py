@@ -17,7 +17,10 @@ BOARD = ROOT / 'fpga/tang-primer-20k'
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['doctor', 'sim', 'build', 'scan', 'detect', 'program', 'flash'])
+    parser.add_argument('action', choices=['doctor', 'sim', 'build', 'scan', 'detect',
+                                           'program', 'load', 'flash'])
+    parser.add_argument('--design', choices=['cpu', 'blink'], default='cpu',
+                        help='design to test/build/program (default: cpu)')
     parser.add_argument('--build-dir', type=Path, default=ROOT / 'build/fpga/tang-primer-20k')
     parser.add_argument('--serial', help='USB probe serial number, when multiple boards are connected')
     parser.add_argument('--jtag-hz', type=int, default=2500000, help='JTAG clock (default: 2500000 Hz)')
@@ -36,6 +39,26 @@ def main():
     env['PATH'] = str(suite / 'bin') + os.pathsep + env.get('PATH', '')
     # Upstream executable wrappers configure their own libraries and Python.
     history = []
+
+    rtl_sources = sorted((ROOT / 'verilog').glob('**/*.v'))
+    rtl_sources = [path for path in rtl_sources if 'test' not in path.parts]
+    designs = {
+        'cpu': {
+            'top': 'tang_primer_20k_soc',
+            'test_top': 'tang_primer_20k_soc_tb',
+            'sources': rtl_sources + [BOARD / 'setsuna_soc.v'],
+            'test_sources': rtl_sources + [BOARD / 'setsuna_soc.v', BOARD / 'setsuna_soc_tb.v'],
+            'bitstream': 'setsuna.fs',
+        },
+        'blink': {
+            'top': 'blink',
+            'test_top': 'blink_tb',
+            'sources': [BOARD / 'blink.v'],
+            'test_sources': [BOARD / 'blink.v', BOARD / 'blink_tb.v'],
+            'bitstream': 'blink.fs',
+        },
+    }
+    design = designs[args.design]
 
     def run(tool, *options, log):
         command = [str(suite / 'bin' / tool), *map(str, options)]
@@ -65,30 +88,37 @@ def main():
         return result
 
     def simulate():
-        run('iverilog', '-g2012', '-s', 'blink_tb', '-o', out / 'blink_tb.vvp',
-            BOARD / 'blink.v', BOARD / 'blink_tb.v', log='iverilog.log')
-        run('vvp', out / 'blink_tb.vvp', log='simulation.log')
+        simulation = out / (args.design + '_tb.vvp')
+        run('iverilog', '-g2012', '-s', design['test_top'], '-o', simulation,
+            *design['test_sources'], log='iverilog.log')
+        run('vvp', simulation, log='simulation.log')
 
     def build():
         tool_versions = versions()
         simulate()
         script = out / 'synth.ys'
-        script.write_text('read_verilog ' + json.dumps(str(BOARD / 'blink.v')) + '\n' +
-                          'synth_gowin -top blink -family gw2a -json ' +
-                          json.dumps(str(out / 'synth.json')) + '\n')
+        script.write_text('read_verilog -sv ' +
+                          ' '.join(json.dumps(str(source)) for source in design['sources']) + '\n' +
+                          'synth_gowin -top ' + design['top'] + ' -family gw2a\n' +
+                          'setundef -zero\n' +
+                          'opt_clean\n' +
+                          'write_json ' + json.dumps(str(out / 'synth.json')) + '\n')
         run('yosys', '-s', script, log='yosys.log')
         run('nextpnr-himbaechel', '--json', out / 'synth.json', '--write', out / 'routed.json',
             '--device', 'GW2A-LV18PG256C8/I7', '--vopt', 'family=GW2A-18',
             '--vopt', 'cst=' + str(BOARD / 'board.cst'), '--freq', '27', '--seed', '1',
             '--report', out / 'timing.json', log='nextpnr.log')
-        run('gowin_pack', '-c', '-d', 'GW2A-18', '-o', out / 'blink.fs', out / 'routed.json', log='pack.log')
+        bitstream = out / design['bitstream']
+        run('gowin_pack', '-c', '-d', 'GW2A-18', '-o', bitstream, out / 'routed.json', log='pack.log')
         report = {'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                   'suite': expected, 'tool_versions': tool_versions,
+                  'design': args.design, 'top': design['top'],
                   'board': 'tangprimer20k', 'device': 'GW2A-LV18PG256C8/I7',
                   'clock_mhz': 27, 'seed': 1,
                   'sources': {str(p.relative_to(ROOT)): sha256(p) for p in
-                              (BOARD/'blink.v', BOARD/'board.cst', BOARD/'blink_tb.v', LOCK, Path(__file__))},
-                  'bitstream_sha256': sha256(out/'blink.fs'), 'commands': history.copy()}
+                              design['test_sources'] + [BOARD/'board.cst', LOCK, Path(__file__)]},
+                  'bitstream': design['bitstream'],
+                  'bitstream_sha256': sha256(bitstream), 'commands': history.copy()}
         (out / 'build-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
 
     probe = ['-b', 'tangprimer20k', '--freq', str(args.jtag_hz)]
@@ -106,15 +136,29 @@ def main():
     elif args.action == 'detect':
         run('openFPGALoader', *probe, '--detect', log='detect.log')
     else:
-        # Always build current sources before programming; do not use stale bitstreams.
-        build()
-        run('openFPGALoader', *probe, '--detect', log='detect.log')
+        if args.action == 'load':
+            manifest_path = out / 'build-manifest.json'
+            if not manifest_path.exists():
+                raise SystemExit('No build manifest; run make fpga-build first.')
+            manifest = json.loads(manifest_path.read_text())
+            bitstream = out / design['bitstream']
+            if (manifest.get('design') != args.design or
+                    manifest.get('bitstream') != design['bitstream'] or
+                    not bitstream.exists() or
+                    manifest.get('bitstream_sha256') != sha256(bitstream)):
+                raise SystemExit('Existing bitstream does not match its build manifest; rebuild it.')
+        else:
+            # Build current sources before programming so the default cannot use stale RTL.
+            build()
         options = ['-f'] if args.action == 'flash' else []
-        run('openFPGALoader', *probe, *options, out/'blink.fs', log=args.action+'.log')
+        bitstream = out / design['bitstream']
+        log_name = 'program.log' if args.action in ('program', 'load') else 'flash.log'
+        run('openFPGALoader', *probe, *options, bitstream, log=log_name)
         (out/'program-manifest.json').write_text(json.dumps({
             'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
-            'mode': args.action, 'serial': args.serial,
-            'bitstream_sha256': sha256(out/'blink.fs'), 'command': history[-1]}, indent=2)+'\n')
+            'mode': args.action, 'design': args.design, 'serial': args.serial,
+            'bitstream': design['bitstream'],
+            'bitstream_sha256': sha256(bitstream), 'command': history[-1]}, indent=2)+'\n')
 
 
 if __name__ == '__main__':

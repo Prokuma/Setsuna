@@ -159,5 +159,8 @@ FPGA環境整備とsim開発は独立して進められる。sim完成後のRTL�
 `sim/`にC17のエミュレータ、5段パイプライン、ローダー、デバッガー、Makefile、
 公開テスト実行基盤を実装した。実装の範囲と制約は[simulator.md](simulator.md)に記載。
 乗除算・FP演算のレイテンシーは現在1 EXサイクルのモデルとし、複数サイクル化は今後の拡張点。
-`verilog/`は既存の骨組みのまま。別途`fpga/tang-primer-20k/`のテストRTLで、
-ARM Macからの合成・配置配線・SRAM書き込みを確認済み。
+`verilog/`にはRV64IMの5段パイプライン、I/D cache、GPIO/UART peripheralを実装し、
+4つのRTLテストとYosys構造チェックを通した。詳細は[rtl.md](rtl.md)。
+C/A/F/D、CSR/トラップ実行、Mの複数サイクル化は引き続き移植対象。
+別途`fpga/tang-primer-20k/`のテストRTLで、ARM Macからの合成・配置配線・
+SRAM書き込みを確認済み。

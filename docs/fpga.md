@@ -51,9 +51,18 @@ make fpga-sim    # RTL単体テスト
 make fpga-build  # RTLテスト → Yosys → nextpnr-himbaechel → gowin_pack
 ```
 
-テスト回路は`fpga/tang-primer-20k/blink.v`。27 MHzを分周して、6個のLEDを0.5秒ごとに
-順番に点灯する。LED出力はactive-low。電源投入時の初期状態から6個一巡を繰り返す。
-テストベンチはクロック周波数パラメーターを小さくして、初期値、周期、2周分の点灯順を検証する。
+既定の`cpu`デザインは`verilog/`のSetsunaコア、各2-lineのI/D cache、GPIO peripheral、
+ボード内ROMを合成する。ROM上のRV64IプログラムがGPIO MMIOを介して6個のactive-low LEDを
+順番に点灯する。Tang Primer 20K構成では組合せRV64M演算器を除外している。
+`make fpga-sim`はROMプログラムが連続する2つのLED状態を書き込むまでを検証する。
+
+独立したツールチェーン確認用blink回路も残している。
+
+```sh
+make fpga-blink-build
+make fpga-blink-program
+# または任意のfpga-* targetへ FPGA_DESIGN=blink を指定
+```
 
 | 設定 | 値 |
 | --- | --- |
@@ -67,7 +76,8 @@ make fpga-build  # RTLテスト → Yosys → nextpnr-himbaechel → gowin_pack
 
 生成物は`build/fpga/tang-primer-20k/`:
 
-- `blink.fs`: 書き込み用bitstream。
+- `setsuna.fs`: 既定CPUデザインの書き込み用bitstream。
+- `blink.fs`: `FPGA_DESIGN=blink`で生成するsmoke-test bitstream。
 - `synth.json` / `routed.json`: 合成・配置配線結果。
 - `timing.json`: タイミング・使用資源レポート。
 - `build-manifest.json`: ツール版、OS/CPU、入力とbitstreamのSHA-256、実行コマンド。
@@ -86,11 +96,17 @@ macOSで「アクセサリの接続を許可」が出たら許可する。
 ```sh
 make fpga-scan     # USBデバッガーの列挙
 make fpga-detect   # JTAG経由でFPGAを識別
-make fpga-program # 現在のRTLを再ビルド → 検出 → SRAMへ書き込み
+make fpga-program # 現在のRTLを再ビルド → SRAMへ書き込み
+make fpga-load     # 直前のmanifestとbitstreamを照合 → SRAMへ書き込み
 ```
 
 SRAM書き込みは電源断で失われる。Flashの既存内容は書き換えない。
-書き込み後、DockのLEDが0.5秒ごとに順番に点灯することを目視確認する。
+`fpga-program`は合成から書き込みまでを一度に行う。`fpga-load`は、直前の
+`build-manifest.json`に記録されたdesign名、ファイル名、SHA-256が一致する場合だけ、
+再ビルドを省いて同じbitstreamを書き込む。書き込み処理自体がJTAG chainを識別するため、
+独立した`--detect`を重ねて実行しない。
+
+書き込み後、DockのLEDがCPUの実行により順番に点灯することを目視確認する。
 書き込み成功時は`program-manifest.json`と`program.log`を保存する。
 
 複数のデバッガーを接続している場合は、`fpga-scan`で得たUSBシリアルを指定する。
@@ -153,6 +169,8 @@ ARM Mac、OSS CAD Suite 2026-09-22で以下を確認:
 - JTAG: IDCODE `0x81b`、Gowin GW2A(R)-18(C)。
 - SRAMへの書き込み100%、openFPGALoader正常終了。
 - ユーザーの目視確認により、DockのLEDが約0.5秒ごとに順番に点灯することを確認。
+- Setsuna RV64Iコア、2-line I/D cache、GPIO MMIO、内蔵ROMを含む`setsuna.fs`を生成し、
+  SRAMへの書き込み100%、openFPGALoader正常終了。CPU版のLED動作はRTL testbenchで確認。
 - Linux/Intel Macの同じ手順用アーカイブとチェックサムは固定済みだが、各ホストでの実行は未検証。
 
 ## 参照
