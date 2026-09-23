@@ -121,4 +121,6 @@ python3 scripts/rtl_test.py core cache
 Tang Primer 20K用トップはonboard DDR3接続まで実装済みで、RTL testbenchではDDR boot後に
 GPIOの6-bit binary counterが`1, 2, 3`へ進む。現行OSS CAD SuiteではDQS primitiveを
 nextpnrが配置できないため、CPU+DDR版の実機bitstream生成は配置前で停止する。
+実験用portable PHYは通常OSER8とfabric入力へ置換するが、物理PHYの検証は未完了。
+`fpga-sim`の成功は物理DDR接続の成功を意味しない。詳細は[FPGAガイド](fpga.md)を参照。
 既存の`fpga/tang-primer-20k/blink.v`はFPGAツール経路を検証する独立した回路。

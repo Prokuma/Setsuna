@@ -105,6 +105,71 @@ make fpga-blink-program
 - `build-manifest.json`: ツール版、OS/CPU、入力とbitstreamのSHA-256、実行コマンド。
 - 各工程の`.log`: 失敗した工程の切り分けに使用。
 
+### 起動先の切り替え
+
+ビルド時に`FPGA_BOOT=ddr`（既定）または`FPGA_BOOT=rom`を選ぶ。
+Pythonの同等指定は`--boot-mode ddr|rom`。スイッチによる実行中の切り替えではない。
+
+```sh
+make fpga-sim FPGA_BOOT=rom
+make fpga-build FPGA_BOOT=rom
+make fpga-load FPGA_BOOT=rom
+make fpga-sim FPGA_BOOT=ddr
+make fpga-build FPGA_BOOT=ddr
+```
+
+ROM版は`BOOT_FROM_DDR=0`を使う専用トップ`tang_primer_20k_rom`を合成する。
+DDR controller・PLL・DDRピンは生成netlistに含まれず、基板の27 MHzを直接CPUへ供給する。
+同期読み出しの`boot_rom`にはblock ROM属性を付け、デモの合成でBSRAM 4個を確認した。
+ROM版の合成・配置配線・bitstream生成は成功。LUT4は13,490 / 20,736（65%）、
+配線後Fmaxは73.54 MHzで27 MHz制約を満たす。生成物は
+`build/fpga/tang-primer-20k/rom/setsuna.fs`。ROM初期化の修正後、ユーザーが実機で2進カウントを確認済み（詳細は後述）。
+ROM/DDRとも実行開始アドレスは`0x80000000`で、GPIOの2進カウンタデモを共用する。
+ROM版には書き込み可能なRAMを用意していない。ROMへのstoreは応答して破棄し、範囲外の
+読み出しは0を返す。スタックや書き込み可能なdata領域を使うプログラムはDDR版が必要。
+
+`FPGA_PROGRAM=program.bin`でイメージを指定できる。ROM版の結果は
+`build/fpga/tang-primer-20k/rom/`へ分離する。manifestに起動先を記録し、異なる起動先の
+bitstreamを指定した`fpga-load`は書き込み前に拒否する。
+両方の`fpga-sim`でLEDが`1 → 2 → 3`へ進むことを確認している。
+
+### LEDによる起動診断
+
+通常のGPIO表示と、停止箇所を切り分けるstatus表示をビルド時に選べる。
+
+```sh
+make fpga-build FPGA_BOOT=rom FPGA_ARGS='--led-mode status'
+make fpga-load FPGA_BOOT=rom FPGA_ARGS='--led-mode status'
+```
+
+結果はROM版なら`build/fpga/tang-primer-20k/rom/status/`に分離し、manifestにも
+LEDモードを記録する。LED5以外は一度発生すると点灯を保持する（リセットで解除）。
+
+| LED | 点灯の意味 |
+| --- | --- |
+| 0 | CPUの起動リセット解除 |
+| 1 | 命令メモリが要求へ応答 |
+| 2 | 1命令以上の実行完了 |
+| 3 | GPIOに0以外の値が出た |
+| 4 | CPUがトラップした |
+| 5 | 27 MHz基準クロックのheartbeat（約0.62秒ごとに反転） |
+
+LED1は応答を示すだけで、読み出した命令の正しさまでは保証しない。
+通常デモは最初にGPIOへ0を書き、待ちループ終了後に1へ進むため、しばらく全消灯になる。
+ROM版もDDR版も、RTLテストで診断表示と通常GPIOカウンタを並行して検証する。
+診断用ROM版はLUT4 14,262 / 20,736、BSRAM 4個、配線後Fmax 74.18 MHzで
+27 MHz制約を満たした。SRAM書き込み100%・終了コード0を確認。
+ユーザーの観察は「LED0点滅、LED1/4/5点灯」。並びを逆順に読むと設計上のLED5が
+heartbeat、LED0/1/4が点灯し、ROM応答後・命令retire前のトラップと整合する。
+
+調査で、修正前の合成済みSPX9のINIT_RAMがすべて0だったことを確認した。
+`boot_rom`の全領域ゼロ初期化が`$readmemh`と重複し、RTL simulationとYosys合成で
+異なる初期値になっていた。ゼロ初期化をイメージ末尾以降だけに限定して修正した。
+`make test-rtl`はYosysのmemory_collect後の全ROMワードをhexと照合し、paddingも検証する。
+修正後のSPX9では命令に由来する非ゼロ初期値を確認済み。通常表示ROM版を再ビルドし、
+配線後Fmax 65.97 MHzで27 MHz制約PASS、SRAM書き込み100%・終了コード0を確認した。
+修正後、ユーザーがLEDの2進カウントを実機で確認した。ROMからの命令取得、CPU実行、GPIO更新まで動作確認済み。
+
 ### 現行OSSフローのDDR3制限
 
 OSS CAD Suite 2026-09-22ではCPU+DDR3 RTLのYosys合成まで成功する。`ENABLE_M=0`、
@@ -120,13 +185,58 @@ ERROR: Unable to place cell '...u_dqs', no BELs remaining to implement cell type
 現行Apiculaのsupported-primitives表ではGW2Aに`DQS`、`IDES8_MEM`、`OSER8_MEM`は存在するが、
 Apicula対応欄が空である。nextpnrのGW2A-18/18C chip databaseにも利用可能なDQS BELがなく、
 この構成の配置配線とbitstream生成は完了できない。`make fpga-synth`はこの未対応部分より前の
-再現可能な到達点として用意している。DQSを省くことはDDR3のread capture/calibrationを壊すため、
-未検証bitstreamを生成する迂回は行わない。配置配線以降はApicula/nextpnrのDQS対応、または
-別のDDR PHY backendが必要になる。
+再現可能な到達点として用意している。
 
-controller内のvendor `DLL` primitiveも現行Yosys libraryにはないため、生成する互換ソースでは
-upstreamがDDR3-800用のnominal値として記載する25 tapへ固定している。DQS対応後にも実機で
-write leveling/read calibrationと温度・電圧marginを検証する必要がある。
+### 実験用portable PHY（2026-09-23）
+
+`FPGA_ARGS='--ddr-phy portable'`で、DQS専用セルを通常のOSER8とfabricの
+両エッジサンプリングへ置き換えた試作を選択できる。upstream submoduleは変更せず、
+ビルド先の`ddr3_controller_yosys.v`を生成する。既定は`native`のままとする。
+
+```sh
+make fpga-synth FPGA_ARGS='--ddr-phy portable'
+make fpga-build FPGA_ARGS='--ddr-phy portable'
+```
+
+試作はwrite leveling/read calibrationを省略するため、実機動作を保証しない。
+既存の`fpga-sim`はtransaction-level DDRモデルを使用しており、物理PHY、read burstの
+位相・word alignment、I/O setup/holdを検証していない。
+
+試作ではDQS配置エラーを回避し、LUT4 13,914 / 20,736（67%）、DFF 4,044 / 15,552（26%）で
+配置配線まで到達した。ただし当初の27 MHz一律制約は誤りで、実際のPLL出力は
+398.25 MHz、CPU/controllerは99.5625 MHzである。旧結果のsystem Fmaxは69.35 MHzであり、
+実クロックでのtiming closureを示していない。現在は`clocks.sdc`で各周波数を指定する。
+同じ合成netlistを新制約で再配置配線した結果もsystem Fmaxは69.35 MHzで、
+要求99.57 MHz（ツールのperiod丸め後）に対してFAIL、nextpnr終了コード1となった。
+再評価ログは`build/fpga/tang-primer-20k/nextpnr-constrained.log`に保存している。
+
+pack時のSSTL/SSTL_D衝突をDIFF印と電圧テーブルの補足で回避する実験も行ったが、
+それだけでは負側ピンの出力回路を実装できないため、この処理は採用していない。
+portableの通常pack/programは実装側で停止させる。
+`fpga-load`も旧制約またはportableで作成したmanifestを既定では拒否する。
+
+2026-09-23、実機検証の指示を受け、保存済みの実験bitstreamをmanifestのSHA-256と
+照合してSRAMへロードした。openFPGALoaderは100%・終了コード0。Flashは変更していない。
+実機のLEDは全消灯のままで、DDRからの起動成功は確認できなかった。このロード結果はタイミングや差動I/Oの正しさを
+保証しない。再現コマンドは以下で、実験オプションはCPUのSRAMロードだけに限定する。
+
+```sh
+python3 scripts/fpga/run.py load --design cpu --experimental-load
+```
+
+実験時のbitstream SHA-256は
+`ec5a3318c73fde6eb027d97d5c179a50886744e195ccfdd85d83fe36f1a0336d`。
+`program.log`と`program-manifest.json`に書き込み結果・実験フラグを記録する。
+
+次に必要な実装・検証:
+
+- CK/DQSの正負ピンをRTLから明示し、SSTL15差動出力・tristateを実装する。
+- read burstの取り込み窓とword alignmentをPHYレベルのテストで検証する。
+- 99.5625 MHzのsystem timingを閉じる。DDR I/O timingも別途制約・検証する。
+- その後、実機のメモリパターンテストを通してからDDR起動を確認する。
+
+native側のvendor `DLL`も現行Yosys libraryにはないため、互換ソースでは
+upstreamのnominal値25 tapへ固定する。nativeも実機の校正・margin検証が必要である。
 
 ```sh
 # 出力先を変える場合（空白を含むパスは直接Pythonに渡す）
@@ -206,7 +316,7 @@ ioreg -p IOUSB -l -w 0 | grep -E '"(USB Product Name|idVendor|idProduct)"'
 `gowin_pack`のNumpy / Msgspec / fastcrc不在メッセージは、この配布版では高速化用の
 オプション依存に関する警告。今回、bitstream生成は終了コード0で完了した。
 
-## 確認結果（2026-09-22）
+## 確認結果（2026-09-23）
 
 ARM Mac、OSS CAD Suite 2026-09-22で以下を確認:
 
@@ -217,7 +327,7 @@ ARM Mac、OSS CAD Suite 2026-09-22で以下を確認:
 - SRAMへの書き込み100%、openFPGALoader正常終了。
 - 以前の内蔵ROM版Setsuna RV64IではSRAM書き込み100%とLED移動表示を実機確認済み。
 - 新しいDDR3版はRTL testbench成功、Yosys合成成功。nextpnr packingでLUT4 79%となり容量内。
-- 新しいDDR3版はnextpnrのDQS未対応により配置前で停止するため、bitstream生成・書き込みは未実施。
+- native DDR3版はDQS配置で停止。portable試作は旧27 MHz制約で配置配線まで到達したが、PHYと実クロックの検証は未完了。試作bitstreamのSRAM書き込みは成功。LEDは全消灯でDDR起動未確認。
 - Linux/Intel Macの同じ手順用アーカイブとチェックサムは固定済みだが、各ホストでの実行は未検証。
 
 ## 参照

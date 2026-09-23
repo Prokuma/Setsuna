@@ -10,6 +10,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TESTS = {
+    'boot_rom': ['verilog/memory/boot_rom.v', 'verilog/test/boot_rom_tb.v'],
     'core': ['verilog/core/register_file.v', 'verilog/core/decode.v',
              'verilog/core/execute.v', 'verilog/core/core.v', 'verilog/test/core_tb.v'],
     'cache': ['verilog/cache/cache.v', 'verilog/test/cache_tb.v'],
@@ -70,6 +71,31 @@ def main():
     with (args.build_dir/'yosys-check.log').open('w') as log:
         subprocess.run([str(yosys), '-p', yosys_script], stdout=log,
                        stderr=subprocess.STDOUT, check=True, timeout=60)
+    if 'boot_rom' in tests:
+        # RTL simulation alone did not detect overlapping zero-fill/$readmemh
+        # initialization being resolved differently by Yosys.
+        memory_json = (args.build_dir/'boot-rom-memory.json').resolve()
+        memory_script = (
+            'read_verilog -sv verilog/memory/boot_rom.v; '
+            'chparam -set IMAGE_WORDS 6 -set IMAGE_FILE '
+            '"fpga/tang-primer-20k/demo_program_sim.hex" boot_rom; '
+            'hierarchy -top boot_rom; proc; memory_collect; write_json ' +
+            json.dumps(str(memory_json)))
+        with (args.build_dir/'boot-rom-memory.log').open('w') as log:
+            subprocess.run([str(yosys), '-p', memory_script], cwd=ROOT,
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
+        cells = json.loads(memory_json.read_text())['modules']['boot_rom']['cells']
+        memories = [c for c in cells.values() if c['type'] == '$mem_v2']
+        if len(memories) != 1:
+            raise SystemExit('Expected one synthesized boot ROM')
+        init = memories[0]['parameters']['INIT']
+        words = [int(w, 16) for w in
+                 (ROOT/'fpga/tang-primer-20k/demo_program_sim.hex').read_text().split()]
+        actual = [init[len(init)-(i+1)*64:len(init)-i*64] for i in range(len(init)//64)]
+        expected = [f'{w:064b}' for w in words] + ['0'*64] * (len(actual)-len(words))
+        if actual != expected:
+            raise SystemExit('Synthesized ROM initialization differs from program image/padding')
+        print('PASS: synthesized ROM contains exact program image and zero padding')
     print(f'PASS: {len(tests)} RTL suites, integrated top compile, and Yosys structural check')
 
 
