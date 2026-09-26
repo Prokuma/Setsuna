@@ -123,10 +123,17 @@ module core #(
     wire execute_redirect;
     wire [63:0] execute_redirect_pc;
     wire execute_illegal;
+    wire [63:0] divider_result;
+    wire divider_busy;
+    wire divider_done;
+    wire division_instruction = ENABLE_M && idex_valid &&
+        (idex_instruction[6:0] == 7'h33 || idex_instruction[6:0] == 7'h3b) &&
+        idex_instruction[31:25] == 7'h01 && idex_instruction[14];
     execute #(.ENABLE_M(ENABLE_M)) execution_unit (
         .instruction(idex_instruction), .pc(idex_pc),
         .operand_a(execute_operand_a), .operand_b(execute_operand_b),
-        .immediate(idex_immediate), .result(execute_result),
+        .immediate(idex_immediate), .division_result(divider_result),
+        .result(execute_result),
         .memory_address(execute_address), .redirect(execute_redirect),
         .redirect_pc(execute_redirect_pc), .illegal(execute_illegal)
     );
@@ -168,6 +175,17 @@ module core #(
     assign data_write_data = shifted_store_data;
 
     wire memory_stall = data_valid && !data_ready;
+    wire division_wait = division_instruction && !divider_done;
+    wire divider_start = division_wait && !divider_busy && !memory_stall && !halted && !reset;
+    wire divider_accept = division_instruction && divider_done && !memory_stall && !halted;
+    iterative_divider divider (
+        .clk(clk), .reset(reset), .start(divider_start), .accept(divider_accept),
+        .word_mode(idex_instruction[6:0] == 7'h3b),
+        .signed_mode(!idex_instruction[12]),
+        .remainder_mode(idex_instruction[13]),
+        .dividend(execute_operand_a), .divisor(execute_operand_b),
+        .busy(divider_busy), .done(divider_done), .result(divider_result)
+    );
     wire load_use_stall = ifid_valid && idex_valid && idex_memory_read && idex_rd != 0 &&
         ((decode_uses_rs1 && decode_rs1 == idex_rd) ||
          (decode_uses_rs2 && decode_rs2 == idex_rd));
@@ -179,7 +197,7 @@ module core #(
     wire execute_fault = idex_valid && (idex_illegal || execute_illegal ||
                          idex_instruction == 32'h00000073 ||
                          idex_instruction == 32'h00100073);
-    wire frontend_stall = memory_stall || load_use_stall || execute_fault ||
+    wire frontend_stall = memory_stall || division_wait || load_use_stall || execute_fault ||
                           decode_control_flow || execute_control_flow;
     assign instruction_valid = !reset && !halted && !fault_pending && !frontend_stall;
 
@@ -224,50 +242,56 @@ module core #(
                 memwb_writes_rd <= exmem_writes_rd;
                 memwb_illegal <= exmem_illegal;
 
-                exmem_valid <= idex_valid;
-                exmem_pc <= idex_pc;
-                exmem_instruction <= idex_instruction;
-                exmem_result <= execute_result;
-                exmem_address <= execute_address;
-                exmem_store_data <= execute_operand_b;
-                exmem_rd <= idex_rd;
-                exmem_writes_rd <= idex_writes_rd;
-                exmem_memory_read <= idex_memory_read;
-                exmem_memory_write <= idex_memory_write;
-                exmem_illegal <= idex_illegal || execute_illegal;
-
-                if (execute_fault) begin
-                    fault_pending <= 1'b1;
-                    idex_valid <= 1'b0;
-                    ifid_valid <= 1'b0;
-                end else if (idex_valid && execute_redirect) begin
-                    fetch_pc <= execute_redirect_pc;
-                    idex_valid <= 1'b0;
-                    ifid_valid <= 1'b0;
-                end else if (load_use_stall) begin
-                    idex_valid <= 1'b0;
+                if (division_wait) begin
+                    // Retire older work, insert a bubble, and retain EX/IF/ID
+                    // until the divider has a result.
+                    exmem_valid <= 1'b0;
                 end else begin
-                    idex_valid <= ifid_valid;
-                    idex_pc <= ifid_pc;
-                    idex_instruction <= ifid_instruction;
-                    idex_immediate <= decode_immediate;
-                    idex_rs1_data <= register_rs1_data;
-                    idex_rs2_data <= register_rs2_data;
-                    idex_rs1 <= decode_rs1;
-                    idex_rs2 <= decode_rs2;
-                    idex_rd <= decode_rd;
-                    idex_writes_rd <= decode_writes_rd;
-                    idex_memory_read <= decode_memory_read;
-                    idex_memory_write <= decode_memory_write;
-                    idex_illegal <= decode_illegal;
+                    exmem_valid <= idex_valid;
+                    exmem_pc <= idex_pc;
+                    exmem_instruction <= idex_instruction;
+                    exmem_result <= execute_result;
+                    exmem_address <= execute_address;
+                    exmem_store_data <= execute_operand_b;
+                    exmem_rd <= idex_rd;
+                    exmem_writes_rd <= idex_writes_rd;
+                    exmem_memory_read <= idex_memory_read;
+                    exmem_memory_write <= idex_memory_write;
+                    exmem_illegal <= idex_illegal || execute_illegal;
 
-                    if (instruction_ready && instruction_valid) begin
-                        ifid_valid <= 1'b1;
-                        ifid_pc <= fetch_pc;
-                        ifid_instruction <= instruction_data;
-                        fetch_pc <= fetch_pc + 4;
-                    end else begin
+                    if (execute_fault) begin
+                        fault_pending <= 1'b1;
+                        idex_valid <= 1'b0;
                         ifid_valid <= 1'b0;
+                    end else if (idex_valid && execute_redirect) begin
+                        fetch_pc <= execute_redirect_pc;
+                        idex_valid <= 1'b0;
+                        ifid_valid <= 1'b0;
+                    end else if (load_use_stall) begin
+                        idex_valid <= 1'b0;
+                    end else begin
+                        idex_valid <= ifid_valid;
+                        idex_pc <= ifid_pc;
+                        idex_instruction <= ifid_instruction;
+                        idex_immediate <= decode_immediate;
+                        idex_rs1_data <= register_rs1_data;
+                        idex_rs2_data <= register_rs2_data;
+                        idex_rs1 <= decode_rs1;
+                        idex_rs2 <= decode_rs2;
+                        idex_rd <= decode_rd;
+                        idex_writes_rd <= decode_writes_rd;
+                        idex_memory_read <= decode_memory_read;
+                        idex_memory_write <= decode_memory_write;
+                        idex_illegal <= decode_illegal;
+
+                        if (instruction_ready && instruction_valid) begin
+                            ifid_valid <= 1'b1;
+                            ifid_pc <= fetch_pc;
+                            ifid_instruction <= instruction_data;
+                            fetch_pc <= fetch_pc + 4;
+                        end else begin
+                            ifid_valid <= 1'b0;
+                        end
                     end
                 end
             end

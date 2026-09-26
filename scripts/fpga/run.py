@@ -27,6 +27,8 @@ def main():
                         help='CPU boot memory: external DDR or internal block ROM')
     parser.add_argument('--cache-lines', type=int, default=256,
                         help='lines in each I/D cache (power of two, default: 256)')
+    parser.add_argument('--disable-m', action='store_true',
+                        help='disable RV64M arithmetic for comparison with the RV64I build')
     parser.add_argument('--build-dir', type=Path, default=None)
     parser.add_argument('--serial', help='USB probe serial number, when multiple boards are connected')
     parser.add_argument('--jtag-hz', type=int, default=2500000, help='JTAG clock (default: 2500000 Hz)')
@@ -89,6 +91,7 @@ def main():
                     f'-DSETSUNA_BOOT_FROM_DDR={int(using_ddr)}',
                     f'-DSETSUNA_CACHE_LINES={args.cache_lines}',
                     f'-DSETSUNA_CACHE_INDEX_BITS={args.cache_lines.bit_length() - 1}',
+                    f'-DSETSUNA_ENABLE_M={int(not args.disable_m)}',
                     f'-DSETSUNA_LED_STATUS={int(args.led_mode == "status")}']
 
     rtl_sources = sorted((ROOT / 'verilog').glob('**/*.v'))
@@ -299,6 +302,7 @@ def main():
                   'clock_mhz': 27, 'seed': 1,
                   'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
                   'cache_lines': args.cache_lines if args.design == 'cpu' else None,
+                  'enable_m': not args.disable_m if args.design == 'cpu' else None,
                   'ddr_phy': args.ddr_phy if using_ddr else None,
                   'timing_constraints': 'clocks.sdc' if using_ddr else None,
                   'program': str(program_source) if program_source else None,
@@ -344,6 +348,8 @@ def main():
                 raise SystemExit('Bitstream LED mode differs from requested mode.')
             if args.design == 'cpu' and manifest.get('cache_lines', 2) != args.cache_lines:
                 raise SystemExit('Bitstream cache size differs from requested size.')
+            if args.design == 'cpu' and manifest.get('enable_m', False) != (not args.disable_m):
+                raise SystemExit('Bitstream M-extension mode differs from requested mode.')
             bitstream = out / design['bitstream']
             if (manifest.get('design') != args.design or
                     manifest.get('bitstream') != design['bitstream'] or
@@ -366,6 +372,7 @@ def main():
             'experimental': args.experimental_load,
             'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
             'cache_lines': args.cache_lines if args.design == 'cpu' else None,
+            'enable_m': not args.disable_m if args.design == 'cpu' else None,
             'bitstream': design['bitstream'],
             'bitstream_sha256': sha256(bitstream), 'command': history[-1]}, indent=2)+'\n')
 

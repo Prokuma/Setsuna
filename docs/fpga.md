@@ -63,12 +63,24 @@ make fpga-build  # さらにnextpnr-himbaechel → gowin_pack
 boot loader、16-bit DDR command adapter、Tang Primer 20Kの128 MiB DDR3 controllerを合成する。
 電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、転送完了後に
 CPU resetを解除する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
-0〜63の2進カウンタを表示する。Tang Primer 20K構成では組合せRV64M演算器を除外している。
+0〜63の2進カウンタを表示する。Tang Primer 20K構成はRV64Mを有効にし、
+乗算をDSP、除算・剰余を反復演算器で実装する。比較用に`FPGA_ARGS='--disable-m'`を指定できる。
+同じ256ライン構成のYosys合成では、M無効がLUT4 6,458・DSP 0、M有効が
+LUT4 7,395・`MULT36X36` 4個となった。M有効のDDR版もLUT4 8,427・
+`MULT36X36` 4個で合成を通過した。DDRの配置配線は後述のDQS制限が残る。
+M有効のROM起動版は配置配線とbitstream生成まで成功した。nextpnr結果は
+LUT4 17,468 / 20,736（84%）、DFF 4,323 / 15,552（27%）、
+BSRAM 12 / 46（26%）、`MULT36X36` 4 / 12（33%）、ALU 1,400 / 15,552（9%）。
+配線後Fmaxは68.44 MHzで27 MHz制約を満たした。
+DDR起動時のsystem clockは約99.56 MHzであり、ROM版のタイミング結果を
+DDR版へそのまま適用できない。DDR PHY配置問題の解消後に、乗算経路を含めた
+DDR版タイミングを測定する必要がある。
 `make fpga-sim`はDDRモデルへのboot image転送後、LED表示が1、2、3へ進むまでを検証する。
 I/Dキャッシュは各2 KiBで、`FPGA_ARGS='--cache-lines 32'`のようにライン数を変更できる。
 データとタグはBSRAMに置き、valid/dirtyだけをFFに保持する。
-256ラインのROM起動版はOSS CAD Suite 2026-09-22で配置配線とbitstream生成まで成功した。
-nextpnr結果はLUT4 15,624 / 20,736（75%）、DFF 4,054 / 15,552（26%）、
+比較用のM無効・256ラインROM起動版はOSS CAD Suite 2026-09-22で配置配線と
+bitstream生成まで成功した。nextpnr結果はLUT4 15,624 / 20,736（75%）、
+DFF 4,054 / 15,552（26%）、
 BSRAM 12 / 46（26%、キャッシュ8個＋boot ROM 4個）、配線後Fmax 62.17 MHzで
 27 MHz制約を満たす。DDR起動版も同じ容量でYosys合成まで成功したが、
 実機でのDDR PHY配置と動作検証は下記の制限が残る。

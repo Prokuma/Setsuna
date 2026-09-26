@@ -7,6 +7,7 @@ module execute #(
     input  wire [63:0] operand_a,
     input  wire [63:0] operand_b,
     input  wire [63:0] immediate,
+    input  wire [63:0] division_result,
     output reg  [63:0] result,
     output reg  [63:0] memory_address,
     output reg         redirect,
@@ -16,9 +17,11 @@ module execute #(
     wire [6:0] opcode = instruction[6:0];
     wire [2:0] funct3 = instruction[14:12];
     wire [6:0] funct7 = instruction[31:25];
-    reg [127:0] product;
-    reg signed [127:0] signed_product;
-    reg signed [127:0] mixed_product;
+    wire [127:0] product = operand_a * operand_b;
+    wire [63:0] mixed_product_high = product[127:64] -
+        (operand_a[63] ? operand_b : 64'b0);
+    wire [63:0] signed_product_high = mixed_product_high -
+        (operand_b[63] ? operand_a : 64'b0);
     reg branch_taken;
     reg [63:0] word_value;
 
@@ -29,9 +32,6 @@ module execute #(
         redirect_pc = 64'b0;
         illegal = 1'b0;
         branch_taken = 1'b0;
-        product = operand_a * operand_b;
-        signed_product = $signed(operand_a) * $signed(operand_b);
-        mixed_product = $signed(operand_a) * $signed({1'b0, operand_b});
         word_value = 64'b0;
         case (opcode)
             7'h37: result = immediate;
@@ -100,17 +100,10 @@ module execute #(
                 if (ENABLE_M && funct7 == 7'h01) begin
                     case (funct3)
                         3'h0: result = product[63:0];
-                        3'h1: result = signed_product[127:64];
-                        3'h2: result = mixed_product[127:64];
+                        3'h1: result = signed_product_high;
+                        3'h2: result = mixed_product_high;
                         3'h3: result = product[127:64];
-                        3'h4: result = (operand_b == 0) ? ~64'b0 :
-                            ((operand_a == 64'h8000000000000000 && operand_b == ~64'b0) ? operand_a :
-                             $signed(operand_a) / $signed(operand_b));
-                        3'h5: result = (operand_b == 0) ? ~64'b0 : operand_a / operand_b;
-                        3'h6: result = (operand_b == 0) ? operand_a :
-                            ((operand_a == 64'h8000000000000000 && operand_b == ~64'b0) ? 0 :
-                             $signed(operand_a) % $signed(operand_b));
-                        3'h7: result = (operand_b == 0) ? operand_a : operand_a % operand_b;
+                        3'h4, 3'h5, 3'h6, 3'h7: result = division_result;
                     endcase
                 end else if (funct7 == 0 || (funct7 == 7'h20 && (funct3 == 0 || funct3 == 5))) begin
                     case (funct3)
@@ -129,17 +122,8 @@ module execute #(
             7'h3b: begin
                 if (ENABLE_M && funct7 == 7'h01) begin
                     case (funct3)
-                        3'h0: word_value = operand_a[31:0] * operand_b[31:0];
-                        3'h4: word_value = (operand_b[31:0] == 0) ? 32'hffffffff :
-                            ((operand_a[31:0] == 32'h80000000 && operand_b[31:0] == 32'hffffffff) ?
-                             32'h80000000 : $signed(operand_a[31:0]) / $signed(operand_b[31:0]));
-                        3'h5: word_value = (operand_b[31:0] == 0) ? 32'hffffffff :
-                                     operand_a[31:0] / operand_b[31:0];
-                        3'h6: word_value = (operand_b[31:0] == 0) ? operand_a[31:0] :
-                            ((operand_a[31:0] == 32'h80000000 && operand_b[31:0] == 32'hffffffff) ?
-                             0 : $signed(operand_a[31:0]) % $signed(operand_b[31:0]));
-                        3'h7: word_value = (operand_b[31:0] == 0) ? operand_a[31:0] :
-                                     operand_a[31:0] % operand_b[31:0];
+                        3'h0: word_value = product[31:0];
+                        3'h4, 3'h5, 3'h6, 3'h7: word_value = division_result[31:0];
                         default: illegal = 1'b1;
                     endcase
                 end else if (funct7 == 0 || (funct7 == 7'h20 && (funct3 == 0 || funct3 == 5))) begin

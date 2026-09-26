@@ -121,12 +121,13 @@ stalls, memory wait states, branch flushes, and precise stop/trap behavior.
 make test-rtl
 ```
 
-The test command runs five self-checking suites (core, cache, peripherals, the
-DDR-backed memory subsystem, and the integrated `setsuna` top), then runs a
+The test command runs seven self-checking suites (including the core's iterative
+RV64M divider, cache, peripherals, the DDR-backed memory subsystem, and the
+integrated `setsuna` top), then runs a
 Yosys structural check. See
 [the RTL guide](docs/rtl.md) for the bus/MMIO contracts and the exact migration
 status. RV64GC migration is still in progress: C/A/F/D, CSR/trap execution, and
-a hardware-efficient multi-cycle M unit remain to be implemented.
+multiplier timing improvements remain to be implemented.
 
 ## Tang Primer 20K Dock
 
@@ -165,7 +166,7 @@ programs requiring writable RAM/stack need the DDR backend. Both modes accept
 
 Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
 The default FPGA design copies a boot image into the onboard 128 MiB DDR3 and
-runs the Setsuna RV64I core at `0x80000000`. Its demo displays a six-bit binary
+runs the Setsuna RV64IM core at `0x80000000`. Its demo displays a six-bit binary
 counter through GPIO MMIO. A flat little-endian binary can be selected with
 `make fpga-build FPGA_PROGRAM=program.bin`. Outputs and logs are in
 `build/fpga/tang-primer-20k/`. Use `FPGA_DESIGN=blink` or the `fpga-blink-*`

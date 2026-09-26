@@ -59,15 +59,25 @@ RV64Iの整数演算、分岐・ジャンプ、load/store、`FENCE`/`FENCE.I`の
 - Zicsr、M-mode CSR、`mtvec`トラップ遷移、`mret`。
 - 割り込み、MMU、PMP、S-mode、複数hart。
 - 非整列accessの分割、cache flush/invalidate命令、命令cache coherence。
-- 乗除算の複数サイクル化。現在は組合せEXとして記述しており、機能シミュレーション用。
+- 乗算器のタイミング改善。現在はDSPを使う組み合わせ64×64積をEX段で計算する。
 
 `core`と`setsuna`の`ENABLE_M` parameterを0にすると、M命令をillegal instructionとして
-扱い、組合せ乗除算器を合成結果から除去できる。Tang Primer 20Kの現在のボード構成では、
-限られた論理資源へ収めるためこのRV64I構成を使う。また、`CACHE_LINE_COUNT`と
+扱い、乗除算器を合成結果から除去できる。Tang Primer 20Kの既定構成ではMを有効にする。
+乗算は一つの64×64積をDSPで計算し、`MULH`/`MULHSU`の上位半分は符号補正で得る。
+除算・剰余は1サイクルに商の1ビットを求める反復除算器を共有し、最大64サイクルの間
+EX段を保持する。`DIV[U]W`/`REM[U]W`は32サイクル、ゼロ除算は直ちに結果を返す。
+符号付き除算は絶対値で計算して商・余りの符号を戻す。除数ゼロと
+最小負数÷-1の場合もRISC-Vの規定値を返す。メモリ待機と除算待機が重なる場合も
+完了値を保持し、旧い命令のretireと後続命令の停止を分ける。
+従来の組み合わせ除算ではYosysが除算を幅の数だけ比較・減算段に展開する。
+この変更ではDSPを4個使用し、256ラインROM版のYosys合成LUT4は
+M無効の6,458個からM有効の7,395個へ増加した。配置配線後も27 MHz制約を通過した。
+DDR PHYの制限は`docs/fpga.md`を参照。
+また、`CACHE_LINE_COUNT`と
 `CACHE_INDEX_BITS`でI/D cache容量を指定でき、同ボードの既定値は各256 line（2 KiB）。
 `scripts/fpga/run.py --cache-lines N`で2〜256 lineの2の累乗を指定できる。
 
-次の移植順は、C fetch/decompress、CSR/例外、A、複数サイクルM、F/D。
+次の移植順は、C fetch/decompress、CSR/例外、A、F/D。
 F/DはSoftFloatをそのままRTL化できないため、IEEE 754演算器または検証済みのFPU IPを
 選び、RISC-Vの丸めモード、例外フラグ、NaN boxingをcore側で接続する。
 
@@ -141,6 +151,8 @@ python3 scripts/rtl_test.py core cache
 
 - `core`: forwarding、WB-to-ID bypass、load-use、データmemory wait、taken branch flush、RV64M、
   store/load、precise `EBREAK`。
+- `core_m`: DIV/REMの符号付き・符号なしとW命令、ゼロ除算、最小負数のオーバーフロー、
+  依存命令を挟んだEX停止、MULH系とMULW。
 - `cache`: cold miss、read hit、byte write、dirty eviction/write-back、MMIO bypass。
 - `peripheral`: GPIO read/write、UART busy/waveform、通常memoryへのforward。
 - `setsuna`: core + I/D cache + peripheralの統合実行。命令をmemoryからfetchし、
