@@ -148,6 +148,21 @@ make fpga-program  # rebuild current CPU RTL and load SRAM (volatile)
 make fpga-load     # load the last verified build without rebuilding
 ```
 
+Select the boot backend at build time (default: DDR):
+
+```sh
+make fpga-sim FPGA_BOOT=rom
+make fpga-build FPGA_BOOT=rom
+make fpga-load FPGA_BOOT=rom
+make fpga-sim FPGA_BOOT=ddr
+```
+
+ROM boot runs at 27 MHz directly from internal block memory at `0x80000000`,
+without the DDR controller or its PLL. It is a read-only diagnostic backend;
+programs requiring writable RAM/stack need the DDR backend. Both modes accept
+`FPGA_PROGRAM=program.bin`. ROM builds are isolated under
+`build/fpga/tang-primer-20k/rom/`; the load command checks the recorded boot mode.
+
 Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
 The default FPGA design copies a boot image into the onboard 128 MiB DDR3 and
 runs the Setsuna RV64I core at `0x80000000`. Its demo displays a six-bit binary
@@ -159,5 +174,9 @@ persistent Flash; it replaces the existing Flash contents.
 
 The CPU+DDR design currently reaches nextpnr packing at 16,514 LUT4s (79%), but the pinned
 open-source nextpnr database has no placeable `DQS` BEL and stops before routing.
-The standalone blink flow remains fully placeable and programmable. See the
-FPGA guide for the exact limitation and logs.
+An experimental `FPGA_ARGS="--ddr-phy portable"` backend replaces the unsupported
+PHY cells and reaches placement/routing, but differential pads, read alignment,
+and timing at the actual 99.5625 MHz system clock remain unvalidated. Its packing
+and normal programming are blocked. An explicit experimental SRAM load is available
+for saved images; see the guide. The standalone blink flow remains programmable.
+See the FPGA guide for the exact limitation and logs.
