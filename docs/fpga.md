@@ -59,12 +59,19 @@ make fpga-synth  # RTLテスト → Yosys（CPU + DDR3 controller）
 make fpga-build  # さらにnextpnr-himbaechel → gowin_pack
 ```
 
-既定の`cpu`デザインは`verilog/`のSetsunaコア、各2-lineのI/D cache、GPIO peripheral、
+既定の`cpu`デザインは`verilog/`のSetsunaコア、各256-lineのI/D cache、GPIO peripheral、
 boot loader、16-bit DDR command adapter、Tang Primer 20Kの128 MiB DDR3 controllerを合成する。
 電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、転送完了後に
 CPU resetを解除する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
 0〜63の2進カウンタを表示する。Tang Primer 20K構成では組合せRV64M演算器を除外している。
 `make fpga-sim`はDDRモデルへのboot image転送後、LED表示が1、2、3へ進むまでを検証する。
+I/Dキャッシュは各2 KiBで、`FPGA_ARGS='--cache-lines 32'`のようにライン数を変更できる。
+データとタグはBSRAMに置き、valid/dirtyだけをFFに保持する。
+256ラインのROM起動版はOSS CAD Suite 2026-09-22で配置配線とbitstream生成まで成功した。
+nextpnr結果はLUT4 15,624 / 20,736（75%）、DFF 4,054 / 15,552（26%）、
+BSRAM 12 / 46（26%、キャッシュ8個＋boot ROM 4個）、配線後Fmax 62.17 MHzで
+27 MHz制約を満たす。DDR起動版も同じ容量でYosys合成まで成功したが、
+実機でのDDR PHY配置と動作検証は下記の制限が残る。
 
 任意のflat little-endian RV64 binaryを指定できる。ロード先とentryは`0x80000000`。
 
@@ -173,7 +180,7 @@ heartbeat、LED0/1/4が点灯し、ROM応答後・命令retire前のトラップ
 ### 現行OSSフローのDDR3制限
 
 OSS CAD Suite 2026-09-22ではCPU+DDR3 RTLのYosys合成まで成功する。`ENABLE_M=0`、
-各2-line cache、DDR controller込みのnextpnr packing結果はLUT4 16,514 / 20,736（79%）、
+当時の各2-line cache、DDR controller込みのnextpnr packing結果はLUT4 16,514 / 20,736（79%）、
 DFF 4,004 / 15,552（25%）。したがって論理容量には収まる。
 
 その後のnextpnrは次の箇所で停止する。

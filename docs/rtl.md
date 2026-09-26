@@ -25,8 +25,9 @@ setsuna
 
 - `verilog/core/`: IF/ID、ID/EX、EX/MEM、MEM/WBの段間レジスターを持つ、
   インオーダー・単一発行の5段パイプライン。
-- `verilog/cache/`: 64-bit line、16-entryのdirect-mapped write-back cache。
-  命令用とデータ用に同じモジュールを2個使う。
+- `verilog/cache/`: 64-bit line、ライン数可変のdirect-mapped write-back cache。
+  命令用とデータ用に同じモジュールを2個使う。ラインデータとタグは同期読み出し・
+  書き込みのブロックRAM、valid/dirtyはFFで保持する。
 - `verilog/peripheral/`: MMIOデコード、GPIO、UART送信。
 - `verilog/memory/`: boot image転送、I/D調停、64-bit busから16-bit DDR commandへの変換、
   simulation用DDRモデル。
@@ -63,7 +64,8 @@ RV64Iの整数演算、分岐・ジャンプ、load/store、`FENCE`/`FENCE.I`の
 `core`と`setsuna`の`ENABLE_M` parameterを0にすると、M命令をillegal instructionとして
 扱い、組合せ乗除算器を合成結果から除去できる。Tang Primer 20Kの現在のボード構成では、
 限られた論理資源へ収めるためこのRV64I構成を使う。また、`CACHE_LINE_COUNT`と
-`CACHE_INDEX_BITS`でI/D cache容量を指定でき、同ボードでは各2 lineに設定する。
+`CACHE_INDEX_BITS`でI/D cache容量を指定でき、同ボードの既定値は各256 line（2 KiB）。
+`scripts/fpga/run.py --cache-lines N`で2〜256 lineの2の累乗を指定できる。
 
 次の移植順は、C fetch/decompress、CSR/例外、A、複数サイクルM、F/D。
 F/DはSoftFloatをそのままRTL化できないため、IEEE 754演算器または検証済みのFPU IPを
@@ -80,6 +82,37 @@ backing-memory busは64-bit単位。address下位3bitを含めて渡すが、通
 現在、line sizeも64-bitなのでburstは使用しない。
 
 cacheは`0x00000000f0000000`から`0x00000000ffffffff`をuncachedとしてperipheralへ通す。
+ヒットも同期RAMの読み出し後に判定するため、通常メモリ要求には1サイクルの参照段を設ける。
+ラインデータとタグはリセットせず、valid bitのクリアで無効化する。両配列とも
+同期読み出しと単一書き込みでGowin BSRAMへ推論させる。256ラインのROM起動トップでは
+I/Dキャッシュに`SDPX9B`が各4個（データ2個＋タグ2個）、合計8個使われる。
+boot ROMは別に`SPX9` 4個を使う。`make test-rtl`で単体のBRAM割り当ても検査する。
+
+ROM起動トップのYosys合成比較（同じツール・ボード構成、I/D同容量）:
+
+| cache構成 | LUT4 | FF（DFFE+DFF） | cache用BSRAM |
+| --- | ---: | ---: | ---: |
+| 2ライン、タグをFFに保持 | 5,778 | 2,698 | 4 |
+| 16ライン、タグをFFに保持 | 6,780 | 4,296 | 4 |
+| 16ライン、タグをBSRAMに保持 | 5,950 | 2,472 | 8 |
+| 128ライン、タグをBSRAMに保持 | 5,970 | 2,584 | 8 |
+| 256ライン、タグをBSRAMに保持 | 6,508 | 2,712 | 8 |
+
+256ラインは各2 KiBのデータに加えタグも同じ8個のBSRAMに収まり、
+16ラインと比べてBRAM個数を増やさずに容量を16倍にできる。
+
+### BRAM推論から得た教訓
+
+合成結果を増やしたキャッシュ容量に対して確認すると、ラインデータだけをBRAMにしても
+タグ配列がFFに展開され、2→16ラインでFFが2,698→4,296個、LUT4が5,778→6,780個に
+増えた。タグもBSRAMへ移すことで、16ライン時点でFFは2,472個、LUT4は5,950個へ下がり、
+256ラインまで容量を増やしてもFFは2,712個、LUT4は6,508個に収まった。
+
+BRAM推論では属性だけでなく、同期読み出し、単純な書き込みポート、RAM配列を初期化・
+リセットしない記述が重要だった。valid bitだけをリセットすればRAM内容は無効扱いできる。
+タグとデータを要求受付時に同期読み出しし、その次の段でhit判定する構成にした。
+推論されたと思い込まず、YosysのGowinマッピング後JSONで`SDPX9B`の実数を確認し、
+配置配線後のLUT/FF/BSRAM利用率とタイミングも合わせて評価する。
 
 ## MMIO
 

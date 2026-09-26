@@ -71,6 +71,20 @@ def main():
     with (args.build_dir/'yosys-check.log').open('w') as log:
         subprocess.run([str(yosys), '-p', yosys_script], stdout=log,
                        stderr=subprocess.STDOUT, check=True, timeout=60)
+    if 'cache' in tests:
+        mapped_json = (args.build_dir/'cache-gowin.json').resolve()
+        mapping_script = ('read_verilog -sv verilog/cache/cache.v; '
+                          'synth_gowin -top cache -family gw2a; write_json ' +
+                          json.dumps(str(mapped_json)))
+        with (args.build_dir/'cache-gowin.log').open('w') as log:
+            subprocess.run([str(yosys), '-p', mapping_script], cwd=ROOT,
+                           stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
+        mapped_cells = json.loads(mapped_json.read_text())['modules']['cache']['cells']
+        brams = sum(cell['type'] in ('SP', 'SPX9', 'SDP', 'SDPX9', 'SDPX9B',
+                                    'DP', 'DPX9', 'DPX9B') for cell in mapped_cells.values())
+        if brams < 4:
+            raise SystemExit('Cache data and tags did not both map to Gowin block RAM')
+        print(f'PASS: cache data and tags mapped to {brams} Gowin block RAM cells')
     if 'boot_rom' in tests:
         # RTL simulation alone did not detect overlapping zero-fill/$readmemh
         # initialization being resolved differently by Yosys.

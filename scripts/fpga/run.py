@@ -25,6 +25,8 @@ def main():
                         help='CPU LED output: program GPIO or boot diagnostics')
     parser.add_argument('--boot-mode', choices=['ddr', 'rom'], default='ddr',
                         help='CPU boot memory: external DDR or internal block ROM')
+    parser.add_argument('--cache-lines', type=int, default=256,
+                        help='lines in each I/D cache (power of two, default: 256)')
     parser.add_argument('--build-dir', type=Path, default=None)
     parser.add_argument('--serial', help='USB probe serial number, when multiple boards are connected')
     parser.add_argument('--jtag-hz', type=int, default=2500000, help='JTAG clock (default: 2500000 Hz)')
@@ -35,6 +37,8 @@ def main():
     parser.add_argument('--experimental-load', action='store_true',
                         help='load an existing experimental CPU bitstream into SRAM; no Flash writes')
     args = parser.parse_args()
+    if args.cache_lines < 2 or args.cache_lines > 256 or args.cache_lines & (args.cache_lines - 1):
+        parser.error('--cache-lines must be a power of two from 2 to 256')
     if args.experimental_load and (args.action != 'load' or args.design != 'cpu'):
         parser.error('--experimental-load requires load --design cpu')
     if args.jtag_hz <= 0:
@@ -83,6 +87,8 @@ def main():
     boot_defines = [f'-DSETSUNA_BOOT_IMAGE="{boot_image}"',
                     f'-DSETSUNA_BOOT_WORDS={boot_words}',
                     f'-DSETSUNA_BOOT_FROM_DDR={int(using_ddr)}',
+                    f'-DSETSUNA_CACHE_LINES={args.cache_lines}',
+                    f'-DSETSUNA_CACHE_INDEX_BITS={args.cache_lines.bit_length() - 1}',
                     f'-DSETSUNA_LED_STATUS={int(args.led_mode == "status")}']
 
     rtl_sources = sorted((ROOT / 'verilog').glob('**/*.v'))
@@ -292,6 +298,7 @@ def main():
                   'board': 'tangprimer20k', 'device': 'GW2A-LV18PG256C8/I7',
                   'clock_mhz': 27, 'seed': 1,
                   'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
+                  'cache_lines': args.cache_lines if args.design == 'cpu' else None,
                   'ddr_phy': args.ddr_phy if using_ddr else None,
                   'timing_constraints': 'clocks.sdc' if using_ddr else None,
                   'program': str(program_source) if program_source else None,
@@ -335,6 +342,8 @@ def main():
                 raise SystemExit('Bitstream boot mode differs from requested mode; select the correct build.')
             if args.design == 'cpu' and manifest.get('led_mode', 'gpio') != args.led_mode:
                 raise SystemExit('Bitstream LED mode differs from requested mode.')
+            if args.design == 'cpu' and manifest.get('cache_lines', 2) != args.cache_lines:
+                raise SystemExit('Bitstream cache size differs from requested size.')
             bitstream = out / design['bitstream']
             if (manifest.get('design') != args.design or
                     manifest.get('bitstream') != design['bitstream'] or
@@ -356,6 +365,7 @@ def main():
             'mode': args.action, 'design': args.design, 'serial': args.serial,
             'experimental': args.experimental_load,
             'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
+            'cache_lines': args.cache_lines if args.design == 'cpu' else None,
             'bitstream': design['bitstream'],
             'bitstream_sha256': sha256(bitstream), 'command': history[-1]}, indent=2)+'\n')
 

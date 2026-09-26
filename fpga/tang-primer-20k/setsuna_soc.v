@@ -9,6 +9,15 @@
 `ifndef SETSUNA_LED_STATUS
 `define SETSUNA_LED_STATUS 0
 `endif
+`ifndef SETSUNA_BOOT_FROM_DDR
+`define SETSUNA_BOOT_FROM_DDR 1
+`endif
+`ifndef SETSUNA_CACHE_LINES
+`define SETSUNA_CACHE_LINES 256
+`endif
+`ifndef SETSUNA_CACHE_INDEX_BITS
+`define SETSUNA_CACHE_INDEX_BITS 8
+`endif
 
 // Tang Primer 20K board wrapper. A block-ROM image is copied into the onboard
 // 128 MB DDR3, then Setsuna starts executing at 0x8000_0000 through its caches.
@@ -16,7 +25,9 @@ module tang_primer_20k_soc #(
     parameter integer SIMULATION = 0,
     parameter integer LED_STATUS = `SETSUNA_LED_STATUS,
     parameter integer HEARTBEAT_BITS = 25,
-    parameter integer BOOT_FROM_DDR = 0,
+    parameter integer BOOT_FROM_DDR = `SETSUNA_BOOT_FROM_DDR,
+    parameter integer CACHE_LINES = `SETSUNA_CACHE_LINES,
+    parameter integer CACHE_INDEX_BITS = `SETSUNA_CACHE_INDEX_BITS,
     parameter BOOT_IMAGE_FILE = `SETSUNA_BOOT_IMAGE,
     parameter integer BOOT_IMAGE_WORDS = `SETSUNA_BOOT_WORDS,
     parameter integer RESET_CYCLES = 16
@@ -144,7 +155,7 @@ module tang_primer_20k_soc #(
 
     setsuna #(
         .RESET_VECTOR(DRAM_BASE), .ENABLE_M(0),
-        .CACHE_LINE_COUNT(2), .CACHE_INDEX_BITS(1), .GPIO_WIDTH(8),
+        .CACHE_LINE_COUNT(CACHE_LINES), .CACHE_INDEX_BITS(CACHE_INDEX_BITS), .GPIO_WIDTH(8),
         .CLOCK_HZ(BOOT_FROM_DDR ? 99562500 : 27000000), .UART_BAUD(115200)
     ) soc (
         .clk(system_clk), .reset(processor_reset),
