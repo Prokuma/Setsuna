@@ -17,12 +17,12 @@ BOARD = ROOT / 'fpga/tang-primer-20k'
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['doctor', 'sim', 'synth', 'build', 'scan', 'detect',
+    parser.add_argument('action', choices=['doctor', 'sim', 'synth', 'pack', 'build', 'scan', 'detect',
                                            'program', 'load', 'flash'])
     parser.add_argument('--design', choices=['cpu', 'blink'], default='cpu',
                         help='design to test/build/program (default: cpu)')
-    parser.add_argument('--led-mode', choices=['gpio', 'status'], default='gpio',
-                        help='CPU LED output: program GPIO or boot diagnostics')
+    parser.add_argument('--led-mode', choices=['gpio', 'status', 'ddr'], default='gpio',
+                        help='LED output: program GPIO, CPU status, or DDR boot diagnostics')
     parser.add_argument('--boot-mode', choices=['ddr', 'rom'], default='ddr',
                         help='CPU boot memory: external DDR or internal block ROM')
     parser.add_argument('--cache-lines', type=int, default=256,
@@ -45,6 +45,8 @@ def main():
         parser.error('--experimental-load requires load --design cpu')
     if args.jtag_hz <= 0:
         parser.error('--jtag-hz must be positive')
+    if args.led_mode == 'ddr' and (args.design != 'cpu' or args.boot_mode != 'ddr'):
+        parser.error('--led-mode ddr requires --design cpu --boot-mode ddr')
     lock = json.loads(LOCK.read_text())
     suite = install_path(lock)
     marker = suite / '.setsuna-install.json'
@@ -57,6 +59,8 @@ def main():
         default_out = default_out / 'rom'
     if args.design == 'cpu' and args.led_mode == 'status':
         default_out = default_out / 'status'
+    if args.design == 'cpu' and args.led_mode == 'ddr':
+        default_out = default_out / 'ddr-status'
     out = (args.build_dir or default_out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
@@ -92,7 +96,7 @@ def main():
                     f'-DSETSUNA_CACHE_LINES={args.cache_lines}',
                     f'-DSETSUNA_CACHE_INDEX_BITS={args.cache_lines.bit_length() - 1}',
                     f'-DSETSUNA_ENABLE_M={int(not args.disable_m)}',
-                    f'-DSETSUNA_LED_STATUS={int(args.led_mode == "status")}']
+                    f'-DSETSUNA_LED_STATUS={dict(gpio=0, status=1, ddr=2)[args.led_mode]}']
 
     rtl_sources = sorted((ROOT / 'verilog').glob('**/*.v'))
     rtl_sources = [path for path in rtl_sources if 'test' not in path.parts]
@@ -254,7 +258,7 @@ def main():
             *design['test_sources'], log='iverilog.log')
         run('vvp', simulation, log='simulation.log')
 
-    def build(route=True):
+    def build(route=True, pack_only=False):
         # A failed build must not leave an older bitstream eligible for load.
         (out / 'build-manifest.json').unlink(missing_ok=True)
         tool_versions = versions()
@@ -276,6 +280,12 @@ def main():
                           'blackbox =A:whitebox\n' +
                           'write_json ' + json.dumps(str(out / 'synth.json')) + '\n')
         run('yosys', '-s', script, log='yosys.log')
+        if using_ddr:
+            mapped_top = json.loads((out / 'synth.json').read_text())['modules'][design['top']]
+            sdc_text = (BOARD / 'clocks.sdc').read_text()
+            for kind, name in re.findall(r'get_(nets|ports) \{([^}]+)\}', sdc_text):
+                if name not in mapped_top['netnames' if kind == 'nets' else 'ports']:
+                    raise SystemExit(f'DDR timing constraint matches no {kind}: {name}')
         if not route:
             return
         timing_options = (['--sdc', BOARD / 'clocks.sdc']
@@ -285,10 +295,14 @@ def main():
             constraints = out / 'rom.cst'
             constraints.write_text('\n'.join(line for line in (BOARD / 'board.cst').read_text().splitlines()
                                              if not line.startswith(('IO_LOC "ddr_', 'IO_PORT "ddr_'))) + '\n')
-        run('nextpnr-himbaechel', *timing_options, '--json', out / 'synth.json', '--write', out / 'routed.json',
+        route_options = (['--pack-only'] if pack_only else ['--report', out / 'timing.json'])
+        netlist_output = out / ('packed.json' if pack_only else 'routed.json')
+        run('nextpnr-himbaechel', *timing_options, '--json', out / 'synth.json', '--write', netlist_output,
             '--device', 'GW2A-LV18PG256C8/I7', '--vopt', 'family=GW2A-18',
             '--vopt', 'cst=' + str(constraints), '--freq', '27', '--seed', '1',
-            '--report', out / 'timing.json', log='nextpnr.log')
+            *route_options, log='nextpnr.log')
+        if pack_only:
+            return
         bitstream = out / design['bitstream']
         if using_ddr and args.ddr_phy == 'portable':
             raise SystemExit('Portable PHY is experimental: differential CK/DQS pad mapping and '
@@ -300,6 +314,9 @@ def main():
                   'design': args.design, 'top': design['top'],
                   'board': 'tangprimer20k', 'device': 'GW2A-LV18PG256C8/I7',
                   'clock_mhz': 27, 'seed': 1,
+                  'ddr_controller_clock_mhz': 99.5625 if using_ddr else None,
+                  'ddr_clock_cdc': using_ddr,
+                  'boot_readback_enabled': using_ddr,
                   'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
                   'cache_lines': args.cache_lines if args.design == 'cpu' else None,
                   'enable_m': not args.disable_m if args.design == 'cpu' else None,
@@ -326,6 +343,8 @@ def main():
         simulate()
     elif args.action == 'synth':
         build(route=False)
+    elif args.action == 'pack':
+        build(pack_only=True)
     elif args.action == 'build':
         build()
     elif args.action == 'scan':
@@ -340,7 +359,9 @@ def main():
             manifest = json.loads(manifest_path.read_text())
             if (using_ddr and not args.experimental_load and
                     (manifest.get('ddr_phy') == 'portable' or
-                     manifest.get('timing_constraints') != 'clocks.sdc')):
+                     manifest.get('timing_constraints') != 'clocks.sdc' or
+                     not manifest.get('ddr_clock_cdc') or
+                     not manifest.get('boot_readback_enabled'))):
                 raise SystemExit('CPU bitstream lacks validated PHY/timing constraints; rebuild required.')
             if args.design == 'cpu' and manifest.get('boot_mode', 'ddr') != args.boot_mode:
                 raise SystemExit('Bitstream boot mode differs from requested mode; select the correct build.')

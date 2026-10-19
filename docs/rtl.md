@@ -20,6 +20,8 @@ setsuna
                                   │
                     memory arbiter / DDR3 adapter
                                   │
+                      DDR3 command CDC bridge
+                                  │
                   Tang Primer 20K DDR3 controller
 ```
 
@@ -30,7 +32,7 @@ setsuna
   書き込みのブロックRAM、valid/dirtyはFFで保持する。
 - `verilog/peripheral/`: MMIOデコード、GPIO、UART送信。
 - `verilog/memory/`: boot image転送、I/D調停、64-bit busから16-bit DDR commandへの変換、
-  simulation用DDRモデル。
+  27 MHz / DDR controller間のCDC、simulation用DDRモデル。
 - `verilog/setsuna.v`: コア、I/D cache、peripheralを接続するトップ。
 - `verilog/test/`: 各階層と統合トップの自己検証テストベンチ。
 
@@ -159,12 +161,21 @@ python3 scripts/rtl_test.py core cache
   MMIO storeでGPIOを更新して停止する。
 - `dram_memory`: boot imageをDDRモデルへ転送した後、I/D read、partial writeの
   read-modify-write、refreshを検証する。
+- `ddr_cdc`: source/controllerの速度関係を入れ替え、read/write/refreshの重複・欠落、
+  busy解除より先に来るread dataの保持、転送中resetからの復帰を検証する。
+- `dram_boot`: 全ワード照合後のboot完了、不一致・書き込み/初期化timeout・read timeoutでの
+  起動停止、1-word imageを検証する。合成後のROM初期値もhexと比較する。
 - 全RTLをトップ`setsuna`として再コンパイルし、Yosysでhierarchy展開、process変換、
   structural checkを実行する。ログは`build/rtl-tests/yosys-check.log`。
 
 テストは生成物を`build/rtl-tests/`へ置き、ソースツリーを変更しない。
 Tang Primer 20K用トップはonboard DDR3接続まで実装済みで、RTL testbenchではDDR boot後に
-GPIOの6-bit binary counterが`1, 2, 3`へ進む。現行OSS CAD SuiteではDQS primitiveを
+全イメージをreadback照合し、GPIOの6-bit binary counterが`1, 2, 3`へ進む。
+CPU/cache/boot adapterは27 MHz、PHY/controllerは別クロックで、16-bit command単位の
+toggle handshakeで接続する。payloadを応答まで保持し、制御信号は2段同期する。
+両ドメインのresetは同時にassertし、それぞれで同期解除する。シミュレーションだけでは
+メタステビリティ、payloadの物理伝搬時間、同期FFの配置は検証できない。
+現行OSS CAD SuiteではDQS primitiveを
 nextpnrが配置できないため、CPU+DDR版の実機bitstream生成は配置前で停止する。
 実験用portable PHYは通常OSER8とfabric入力へ置換するが、物理PHYの検証は未完了。
 `fpga-sim`の成功は物理DDR接続の成功を意味しない。詳細は[FPGAガイド](fpga.md)を参照。

@@ -17,6 +17,7 @@ module dram_memory_tb;
     wire data_ready;
     wire [63:0] data_read_data;
     wire boot_complete;
+    wire boot_failed, boot_verifying;
 
     reg controller_init_done = 0;
     wire controller_read;
@@ -33,6 +34,7 @@ module dram_memory_tb;
     reg backend_read;
     reg backend_write;
     integer refresh_count = 0;
+    integer boot_reads = 0;
     integer i;
 
     dram_memory_subsystem #(
@@ -40,6 +42,7 @@ module dram_memory_tb;
         .IMAGE_FILE("verilog/test/dram_boot.hex"), .REFRESH_CYCLES(32)
     ) dut (
         .clk(clk), .reset(reset), .boot_complete(boot_complete),
+        .boot_failed(boot_failed), .boot_verifying(boot_verifying),
         .instruction_valid(instruction_valid), .instruction_address(instruction_address),
         .instruction_ready(instruction_ready),
         .instruction_read_data(instruction_read_data),
@@ -63,6 +66,7 @@ module dram_memory_tb;
             backend_read <= 1'b0;
             backend_write <= 1'b0;
             refresh_count <= 0;
+            boot_reads <= 0;
         end else if (!controller_init_done) begin
             controller_busy <= 1'b1;
         end else if (!controller_busy) begin
@@ -71,6 +75,7 @@ module dram_memory_tb;
                 backend_count <= 3;
                 captured_address <= controller_address;
                 backend_read <= controller_read;
+                if (controller_read && !boot_complete) boot_reads <= boot_reads + 1;
                 backend_write <= controller_write;
                 if (controller_write)
                     memory[controller_address] <= controller_write_data;
@@ -144,6 +149,8 @@ module dram_memory_tb;
         controller_busy = 0;
 
         wait (boot_complete);
+        if (boot_failed || !boot_verifying || boot_reads != 12)
+            $fatal(1, "boot released without complete readback: %0d reads", boot_reads);
         if ({memory[3], memory[2], memory[1], memory[0]} !== 64'h0123456789abcdef ||
             {memory[7], memory[6], memory[5], memory[4]} !== 64'hfedcba9876543210 ||
             {memory[11], memory[10], memory[9], memory[8]} !== 64'h55aa00ff11223344) begin

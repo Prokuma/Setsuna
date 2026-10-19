@@ -32,8 +32,11 @@ module tang_primer_20k_ddr3 #(
 );
     generate
         if (SIMULATION) begin : simulation_phy
+            reg controller_clock = 0;
+            // Deliberately distinct from clk27: exercise the real CDC path.
+            always #2 controller_clock = ~controller_clock;
             wire model_init_done;
-            assign system_clk = clk27;
+            assign system_clk = controller_clock;
             assign init_done = model_init_done;
             assign ddr_dq = 16'bz;
             assign ddr_dqs = 2'bz;
@@ -50,7 +53,7 @@ module tang_primer_20k_ddr3 #(
             assign ddr_dm = 2'b11;
 
             ddr3_controller_model model (
-                .clk(clk27), .reset(reset), .read_command(read_command),
+                .clk(controller_clock), .reset(reset), .read_command(read_command),
                 .write_command(write_command), .refresh_command(refresh_command),
                 .address(address), .write_data(write_data), .read_data(read_data),
                 .data_ready(data_ready), .busy(busy), .init_done(model_init_done)

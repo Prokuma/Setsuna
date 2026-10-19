@@ -56,13 +56,15 @@ git submodule update --init --recursive
 ```sh
 make fpga-sim    # DDRモデルを含むRTLテスト
 make fpga-synth  # RTLテスト → Yosys（CPU + DDR3 controller）
+make fpga-pack   # さらにnextpnr packingまで。DQS配置前の資源確認
 make fpga-build  # さらにnextpnr-himbaechel → gowin_pack
 ```
 
 既定の`cpu`デザインは`verilog/`のSetsunaコア、各256-lineのI/D cache、GPIO peripheral、
 boot loader、16-bit DDR command adapter、Tang Primer 20Kの128 MiB DDR3 controllerを合成する。
-電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、転送完了後に
-CPU resetを解除する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
+電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、
+全ワードを読み返してROMと照合した後にCPU resetを解除する。応答timeoutまたは
+不一致ではresetを保持する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
 0〜63の2進カウンタを表示する。Tang Primer 20K構成はRV64Mを有効にし、
 乗算をDSP、除算・剰余を反復演算器で実装する。比較用に`FPGA_ARGS='--disable-m'`を指定できる。
 同じ256ライン構成のYosys合成では、M無効がLUT4 6,458・DSP 0、M有効が
@@ -72,9 +74,10 @@ M有効のROM起動版は配置配線とbitstream生成まで成功した。next
 LUT4 17,468 / 20,736（84%）、DFF 4,323 / 15,552（27%）、
 BSRAM 12 / 46（26%）、`MULT36X36` 4 / 12（33%）、ALU 1,400 / 15,552（9%）。
 配線後Fmaxは68.44 MHzで27 MHz制約を満たした。
-DDR起動時のsystem clockは約99.56 MHzであり、ROM版のタイミング結果を
-DDR版へそのまま適用できない。DDR PHY配置問題の解消後に、乗算経路を含めた
-DDR版タイミングを測定する必要がある。
+以前はDDR起動時のCPU/controller共通clockが約99.56 MHzだった。
+2026-10-19の変更でCPU/cache/boot adapterは27 MHz、DDR controllerは99.5625 MHzへ分離した。
+ROM版のタイミング結果をDDR版へそのまま適用できず、DDR PHY配置問題の解消後に
+各clockとCDC経路のタイミングを測定する必要がある。
 `make fpga-sim`はDDRモデルへのboot image転送後、LED表示が1、2、3へ進むまでを検証する。
 I/Dキャッシュは各2 KiBで、`FPGA_ARGS='--cache-lines 32'`のようにライン数を変更できる。
 データとタグはBSRAMに置き、valid/dirtyだけをFFに保持する。
@@ -173,6 +176,28 @@ LEDモードを記録する。LED5以外は一度発生すると点灯を保持�
 | 4 | CPUがトラップした |
 | 5 | 27 MHz基準クロックのheartbeat（約0.62秒ごとに反転） |
 
+DDR起動の切り分けには`--led-mode ddr`を使う（DDR版のみ）。出力先は
+`build/fpga/tang-primer-20k/ddr-status/`。従来のstatusと表示割り当てが異なる。
+
+```sh
+make fpga-sim FPGA_ARGS='--led-mode ddr'
+make fpga-synth FPGA_ARGS='--led-mode ddr'
+```
+
+| LED | DDR診断モードで点灯する条件 |
+| --- | --- |
+| 0 | PHY初期化完了がCPU側へ同期された |
+| 1 | boot imageのreadback段階へ進んだ |
+| 2 | 全ワードの照合が完了しCPU resetを解除した |
+| 3 | CPUの命令要求にメモリが応答した |
+| 4 | boot失敗またはCPU trap |
+| 5 | 27 MHz基準のheartbeat |
+
+`boot_error_code`は1=データ不一致、2=書き込み/初期化待ちtimeout、3=読み出しtimeout。
+boot loaderは各wordの応答を最大27,000,000 CPU cycles（27 MHzで1秒）待つ。
+失敗時は電源/resetによる再試行まで停止する。boot imageの照合は、その領域の
+読み書き確認であり、128 MiB全域のaddress/data pattern試験やPHYマージン試験ではない。
+
 LED1は応答を示すだけで、読み出した命令の正しさまでは保証しない。
 通常デモは最初にGPIOへ0を書き、待ちループ終了後に1へ進むため、しばらく全消灯になる。
 ROM版もDDR版も、RTLテストで診断表示と通常GPIOカウンタを並行して検証する。
@@ -191,6 +216,27 @@ heartbeat、LED0/1/4が点灯し、ROM応答後・命令retire前のトラップ
 
 ### 現行OSSフローのDDR3制限
 
+2026-10-19にnative PHY、RV64M有効、I/D各256ライン、DDR診断LEDで再検証した。
+Yosys合成はLUT4 7,549、cache用`SDPX9B` 8個、boot image用`SPX9` 2個、
+`MULT36X36` 4個。nextpnr packingはLUT4 17,874 / 20,736（86%）、
+DFF 4,863 / 15,552（31%）、BSRAM 10 / 46（21%）、`MULT36X36` 4 / 12（33%）。
+27 MHz、99.5625 MHz、398.25 MHzのclock指定に未一致警告はないが、
+DQSの配置で引き続き停止し、配線・timing closure・bitstream生成には到達していない。
+配置失敗ログ例は`build/fpga/ddr-resume-final/nextpnr-placement.log`。
+`make fpga-pack`は配置をせず`packed.json`と`nextpnr.log`を残すため、DQS未対応の間も
+同じ資源確認を再現できる。bitstreamと`build-manifest.json`は作らない。
+現在のキャッシュ容量は維持する。
+
+CPUとDDRを接続する`ddr3_command_cdc`は1 commandだけを保持して往復する。
+要求と応答のtoggleおよびinit状態を2段同期し、payloadはhandshake完了まで保持する。
+resetは両ドメインへ同時にassertし、各domainで2段同期解除する。
+boot adapterのrefresh間隔はCPU側で210 cycles（約7.78 us）とし、
+controller側へrefresh commandも転送する。次の実機検証ではCDCの物理delay/配置と
+refresh待ち時間も確認する。nextpnrの簡易SDCで無効なfalse-path指定を追加して
+timingを通したことにはしない。
+
+以下の数値は変更前の記録である。
+
 OSS CAD Suite 2026-09-22ではCPU+DDR3 RTLのYosys合成まで成功する。`ENABLE_M=0`、
 当時の各2-line cache、DDR controller込みのnextpnr packing結果はLUT4 16,514 / 20,736（79%）、
 DFF 4,004 / 15,552（25%）。したがって論理容量には収まる。
@@ -205,6 +251,38 @@ ERROR: Unable to place cell '...u_dqs', no BELs remaining to implement cell type
 Apicula対応欄が空である。nextpnrのGW2A-18/18C chip databaseにも利用可能なDQS BELがなく、
 この構成の配置配線とbitstream生成は完了できない。`make fpga-synth`はこの未対応部分より前の
 再現可能な到達点として用意している。
+
+### Gowin EDAへ出力する代替経路
+
+OSSフローは維持し、DQS/DLLの対応があるGowin EDAへ渡すプロジェクトを出力できる。
+Gowin EDAは別途導入し、使用する版のGW2A-18C対応とライセンス条件を確認する。
+macOS版も[公式配布一覧](https://www.gowinsemi.com/en/document/main/database/1860/)に存在する。
+Tcl操作は[Gowin Software Tcl Commands](https://cdn.gowinsemi.com.cn/SUG1220E.pdf)を参照。
+このMacではGowin EDA未導入のため、vendor合成・配置配線は未確認。
+
+```sh
+make fpga-export-gowin
+# 別の出力先やprogramを指定する場合:
+make fpga-export-gowin FPGA_PROGRAM=program.bin FPGA_ARGS='--output build/fpga/gowin-custom'
+# 出力ディレクトリーをGowin EDAのある環境へコピーして実行:
+python3 build.py --gw-sh /path/to/IDE/bin/gw_sh
+```
+
+既定出力先は`build/fpga/gowin-ddr/`。既存のビルド結果や手修正を消さないよう、
+空でないディレクトリーへの上書きは拒否する。`FPGA_ARGS`には`--cache-lines N`、
+`--disable-m`、`--led-mode gpio|status|ddr`も指定でき、既定はDDR診断LED。
+出力にはRTL、hex、CST/SDC、`project.tcl`、`build.py`、依存ライセンス、
+ソース/submoduleのrevisionとSHA-256を記録した`export-manifest.json`を含む。
+上流のSystemVerilog/DLL/calibrationは未改変でコピーし、OSS用の固定DLL tapや
+portable置換を適用しない。ROMパスはビルド時に移動後の絶対パスへ解決する。
+
+`build.py`は入力hashを照合して`gw_sh project.tcl`を実行する。`vendor-build.log`と
+tool/bitstream hashを含む`vendor-build-report.json`を残し、旧bitstreamの取り違えを防ぐ。
+bitstream生成だけでtiming closureとは判定しない。Gowin側でclock対象の未一致、
+setup/hold、CDC bundled payload、外部DDRのI/O timing、DLL/read calibrationを確認する。
+通常の`fpga-load`へこのvendor出力を自動流用せず、書き込みも自動実行しない。
+出力・パス移動・カスタムbinary・hash・Tclの構文/参照先は確認済みだが、
+Gowinコマンドの実行とvendor timing解析はツール導入後の検証事項。
 
 ### 実験用portable PHY（2026-09-23）
 
@@ -251,7 +329,8 @@ python3 scripts/fpga/run.py load --design cpu --experimental-load
 
 - CK/DQSの正負ピンをRTLから明示し、SSTL15差動出力・tristateを実装する。
 - read burstの取り込み窓とword alignmentをPHYレベルのテストで検証する。
-- 99.5625 MHzのsystem timingを閉じる。DDR I/O timingも別途制約・検証する。
+- CPU 27 MHz、controller 99.5625 MHz、PHY 398.25 MHzそれぞれのtimingを閉じ、
+  CDC payload/同期FFとDDR I/O timingも別途制約・検証する。
 - その後、実機のメモリパターンテストを通してからDDR起動を確認する。
 
 native側のvendor `DLL`も現行Yosys libraryにはないため、互換ソースでは

@@ -110,6 +110,7 @@ make fpga-doctor                  # 実際のツール版を確認
 make fpga-sim FPGA_BOOT=rom
 make fpga-sim FPGA_BOOT=ddr        # transaction-level DDRモデル
 make fpga-synth FPGA_BOOT=rom
+make fpga-pack                     # 合成とpackingまで。書き込み用イメージは作らない
 make fpga-build FPGA_BOOT=rom      # 配置配線・bitstreamまで
 ```
 
@@ -117,7 +118,7 @@ simの公開検証基準は`riscv-tests`の`p`環境。
 対象は`rv64ui/um/ua/uf/ud/uc`で、Zacas等の対象外をPASSに数えない。
 `make test-riscv`の成功をRTLのISA検証済みという意味で使わない。
 現行RTLテストは`core`、`core_m`、`cache`、`boot_rom`、`peripheral`、
-`dram_memory`、`setsuna`。新しいRTLファイルを追加したら、
+`dram_memory`、`ddr_cdc`、`dram_boot`、`setsuna`。新しいRTLファイルを追加したら、
 `scripts/rtl_test.py`の明示的なソース一覧も更新する。
 
 FPGAの既定は`FPGA_BOOT=ddr`。ROM起動は明示する。
@@ -132,8 +133,11 @@ FPGAの既定は`FPGA_BOOT=ddr`。ROM起動は明示する。
   ツール更新時は現状を再確認し、過去の制限を永久的なハードウェア制約と扱わない。
 - portable PHYは実験用。差動I/O、read capture、timingは実機検証未完了。
   transaction-level DDRモデルの成功は物理DDRの動作証明にならない。
-- ROM版は27 MHz、DDR版のsystem clockは約99.5625 MHz。
+- CPUはROM/DDR版とも27 MHz。DDR controllerは約99.5625 MHzで動き、
+  `ddr3_command_cdc`を通す。DDRのCPU起動前には全イメージをreadback照合する。
   `clocks.sdc`の実クロックで評価し、ROM版のFmaxをDDR版のtiming closureに流用しない。
+- `make fpga-export-gowin`は未改変の上流DLL/calibration付きvendor用プロジェクトを
+  出力する代替経路。Gowin EDA本体は別途必要で、export成功をvendor合成成功と扱わない。
 - 成功は「RTL」「合成」「packing」「配置配線とtiming」「bitstream生成」
   「書き込み」「実機動作」を区別する。書き込み100%だけでDDR起動成功と報告しない。
 - 実機操作は依頼された範囲で行う。`fpga-program`は再ビルド後のSRAMロード、

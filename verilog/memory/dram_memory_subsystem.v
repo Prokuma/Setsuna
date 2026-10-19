@@ -6,11 +6,15 @@ module dram_memory_subsystem #(
     parameter [63:0] DRAM_BASE = 64'h0000000080000000,
     parameter integer IMAGE_WORDS = 1,
     parameter IMAGE_FILE = "",
-    parameter integer REFRESH_CYCLES = 778
+    parameter integer REFRESH_CYCLES = 778,
+    parameter integer BOOT_TIMEOUT_CYCLES = 27000000
 ) (
     input  wire        clk,
     input  wire        reset,
     output wire        boot_complete,
+    output wire        boot_verifying,
+    output wire        boot_failed,
+    output wire [1:0]  boot_error_code,
 
     input  wire        instruction_valid,
     input  wire [63:0] instruction_address,
@@ -35,6 +39,7 @@ module dram_memory_subsystem #(
     input  wire        controller_busy
 );
     wire boot_valid;
+    wire boot_write;
     wire boot_ready;
     wire [63:0] boot_address;
     wire [63:0] boot_write_data;
@@ -47,7 +52,7 @@ module dram_memory_subsystem #(
     wire runtime_ready;
     wire [63:0] runtime_read_data;
     wire selected_valid = boot_done ? runtime_valid : boot_valid;
-    wire selected_write = boot_done ? runtime_write : 1'b1;
+    wire selected_write = boot_done ? runtime_write : boot_write;
     wire [7:0] selected_write_strobe = boot_done ? runtime_write_strobe : 8'hff;
     wire [63:0] selected_address = boot_done ? runtime_address : boot_address;
     wire [63:0] selected_write_data = boot_done ? runtime_write_data : boot_write_data;
@@ -60,11 +65,14 @@ module dram_memory_subsystem #(
     assign runtime_read_data = selected_read_data;
 
     dram_boot_loader #(
-        .DRAM_BASE(DRAM_BASE), .IMAGE_WORDS(IMAGE_WORDS), .IMAGE_FILE(IMAGE_FILE)
+        .DRAM_BASE(DRAM_BASE), .IMAGE_WORDS(IMAGE_WORDS), .IMAGE_FILE(IMAGE_FILE),
+        .TIMEOUT_CYCLES(BOOT_TIMEOUT_CYCLES)
     ) loader (
-        .clk(clk), .reset(reset), .memory_valid(boot_valid), .memory_write(),
+        .clk(clk), .reset(reset), .memory_valid(boot_valid), .memory_write(boot_write),
         .memory_write_strobe(), .memory_address(boot_address),
-        .memory_write_data(boot_write_data), .memory_ready(boot_ready), .done(boot_done)
+        .memory_write_data(boot_write_data), .memory_ready(boot_ready),
+        .memory_read_data(selected_read_data), .done(boot_done),
+        .verifying(boot_verifying), .failed(boot_failed), .error_code(boot_error_code)
     );
 
     memory_arbiter arbiter (
