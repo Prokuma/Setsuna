@@ -1,0 +1,44 @@
+name: Claude Code Review
+
+# PRの作成・更新時にClaude Codeが自動レビューする。
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            このPRを日本語でレビューしてください。AGENTS.mdの方針に従い、特に次を確認すること。
+            - 5段パイプラインのvalid/stall/flush、forwarding、load-use、二重retire、
+              例外後や若い命令のstore等の状態更新
+            - ready/validバスの要求保持とread data有効サイクル
+            - Cのゲストアドレスとホストポインターの区別、境界チェック、整数幅、未定義動作
+            - FPGA資源（BRAM推論、タグ、DSP、反復除算器）への影響
+            - simとRTLの対応範囲、文書・テスト・`scripts/rtl_test.py`のソース一覧の更新漏れ
+            - 未対応CSR・命令を無視してテストを通していないか
+
+            指摘は`gh pr comment`で全体コメントとして、具体的な行には
+            `mcp__github_inline_comment__create_inline_comment`でインラインコメントとして投稿すること。
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*)"

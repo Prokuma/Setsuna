@@ -200,3 +200,23 @@ This alternative preserves the upstream DLL/calibration logic and never programs
 hardware. Export is verified locally; the proprietary synthesis/place-and-route
 flow remains unverified until Gowin EDA is available. Review its timing reports
 before loading any resulting bitstream. See [the FPGA guide](docs/fpga.md).
+
+## Claude Code GitHub Actions
+
+`.github/workflows/` contains two [Claude Code](https://github.com/anthropics/claude-code-action)
+workflows:
+
+- `claude.yml`: responds when `@claude` appears in an issue, issue/PR comment,
+  or PR review. It fetches only `third_party/softfloat` and `third_party/riscv-tests`
+  so that `make -j4` and `make test` can run; FPGA tools and RTL simulators are not
+  installed on the runner.
+- `claude-code-review.yml`: reviews non-draft pull requests on open/update,
+  following the checklist in `AGENTS.md`.
+
+Setup (once per repository):
+
+1. Install the [Claude GitHub App](https://github.com/apps/claude) on this repository.
+2. Add the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (generate it locally with
+   `claude setup-token`). To use an API key instead, add `ANTHROPIC_API_KEY` and
+   replace `claude_code_oauth_token:` with `anthropic_api_key:` in both workflows.
+3. Workflows run from the default branch, so merge them into `main` before use.
