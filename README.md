@@ -213,6 +213,11 @@ workflows:
 - `claude-code-review.yml`: reviews non-draft pull requests on open/update,
   following the checklist in `AGENTS.md`.
 
+Both workflows run only for the repository owner, members, and collaborators
+(`author_association`); pull requests from forks are not reviewed. Do not ask
+`@claude` to act on issues or pull requests written by outside contributors,
+because their text becomes part of Claude's input.
+
 Setup (once per repository):
 
 1. Install the [Claude GitHub App](https://github.com/apps/claude) on this repository.
