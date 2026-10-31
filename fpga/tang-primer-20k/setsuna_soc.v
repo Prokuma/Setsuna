@@ -18,6 +18,9 @@
 `ifndef SETSUNA_CACHE_INDEX_BITS
 `define SETSUNA_CACHE_INDEX_BITS 8
 `endif
+`ifndef SETSUNA_ENABLE_M
+`define SETSUNA_ENABLE_M 1
+`endif
 
 // Tang Primer 20K board wrapper. A block-ROM image is copied into the onboard
 // 128 MB DDR3, then Setsuna starts executing at 0x8000_0000 through its caches.
@@ -28,6 +31,7 @@ module tang_primer_20k_soc #(
     parameter integer BOOT_FROM_DDR = `SETSUNA_BOOT_FROM_DDR,
     parameter integer CACHE_LINES = `SETSUNA_CACHE_LINES,
     parameter integer CACHE_INDEX_BITS = `SETSUNA_CACHE_INDEX_BITS,
+    parameter integer ENABLE_M = `SETSUNA_ENABLE_M,
     parameter BOOT_IMAGE_FILE = `SETSUNA_BOOT_IMAGE,
     parameter integer BOOT_IMAGE_WORDS = `SETSUNA_BOOT_WORDS,
     parameter integer RESET_CYCLES = 16
@@ -55,6 +59,9 @@ module tang_primer_20k_soc #(
     wire system_clk;
     wire ddr_init_done;
     wire boot_complete;
+    wire boot_verifying;
+    wire boot_failed;
+    wire [1:0] boot_error_code;
     wire processor_reset = !boot_complete;
 
     wire instruction_memory_valid;
@@ -92,24 +99,45 @@ module tang_primer_20k_soc #(
     end
 
     generate if (BOOT_FROM_DDR) begin : ddr_boot
+    wire controller_clk;
+    wire phy_init_done, phy_busy, phy_data_ready;
+    wire phy_read, phy_write, phy_refresh;
+    wire [25:0] phy_address;
+    wire [15:0] phy_write_data, phy_read_data;
+    assign system_clk = clk;
     tang_primer_20k_ddr3 #(.SIMULATION(SIMULATION)) physical_memory (
-        .clk27(clk), .reset(power_reset), .system_clk(system_clk),
-        .init_done(ddr_init_done), .read_command(controller_read),
-        .write_command(controller_write), .refresh_command(controller_refresh),
-        .address(controller_address), .write_data(controller_write_data),
-        .read_data(controller_read_data), .data_ready(controller_data_ready),
-        .busy(controller_busy), .ddr_dq(ddr_dq), .ddr_dqs(ddr_dqs),
+        .clk27(clk), .reset(power_reset), .system_clk(controller_clk),
+        .init_done(phy_init_done), .read_command(phy_read),
+        .write_command(phy_write), .refresh_command(phy_refresh),
+        .address(phy_address), .write_data(phy_write_data),
+        .read_data(phy_read_data), .data_ready(phy_data_ready),
+        .busy(phy_busy), .ddr_dq(ddr_dq), .ddr_dqs(ddr_dqs),
         .ddr_addr(ddr_addr), .ddr_bank(ddr_bank), .ddr_cs_n(ddr_cs_n),
         .ddr_ras_n(ddr_ras_n), .ddr_cas_n(ddr_cas_n), .ddr_we_n(ddr_we_n),
         .ddr_ck(ddr_ck), .ddr_cke(ddr_cke), .ddr_odt(ddr_odt),
         .ddr_reset_n(ddr_reset_n), .ddr_dm(ddr_dm)
     );
 
+    ddr3_command_cdc command_bridge (
+        .source_clk(clk), .controller_clk(controller_clk), .reset(power_reset),
+        .source_read(controller_read), .source_write(controller_write),
+        .source_refresh(controller_refresh), .source_address(controller_address),
+        .source_write_data(controller_write_data), .source_read_data(controller_read_data),
+        .source_init_done(ddr_init_done), .source_busy(controller_busy),
+        .source_data_ready(controller_data_ready), .controller_init_done(phy_init_done),
+        .controller_busy(phy_busy), .controller_data_ready(phy_data_ready),
+        .controller_read_data(phy_read_data), .controller_read(phy_read),
+        .controller_write(phy_write), .controller_refresh(phy_refresh),
+        .controller_address(phy_address), .controller_write_data(phy_write_data)
+    );
+
     dram_memory_subsystem #(
         .DRAM_BASE(DRAM_BASE), .IMAGE_WORDS(BOOT_IMAGE_WORDS),
-        .IMAGE_FILE(BOOT_IMAGE_FILE), .REFRESH_CYCLES(778)
+        .IMAGE_FILE(BOOT_IMAGE_FILE), .REFRESH_CYCLES(210)
     ) memory (
         .clk(system_clk), .reset(power_reset), .boot_complete(boot_complete),
+        .boot_verifying(boot_verifying), .boot_failed(boot_failed),
+        .boot_error_code(boot_error_code),
         .instruction_valid(instruction_memory_valid),
         .instruction_address(instruction_memory_address),
         .instruction_ready(instruction_memory_ready),
@@ -127,6 +155,9 @@ module tang_primer_20k_soc #(
     end else begin : rom_boot
         assign system_clk = clk;
         assign boot_complete = !power_reset;
+        assign boot_verifying = 1'b0;
+        assign boot_failed = 1'b0;
+        assign boot_error_code = 0;
         assign ddr_init_done = 1'b0;
         assign ddr_dq = 16'bz;
         assign ddr_dqs = 2'bz;
@@ -154,9 +185,9 @@ module tang_primer_20k_soc #(
     end endgenerate
 
     setsuna #(
-        .RESET_VECTOR(DRAM_BASE), .ENABLE_M(0),
+        .RESET_VECTOR(DRAM_BASE), .ENABLE_M(ENABLE_M),
         .CACHE_LINE_COUNT(CACHE_LINES), .CACHE_INDEX_BITS(CACHE_INDEX_BITS), .GPIO_WIDTH(8),
-        .CLOCK_HZ(BOOT_FROM_DDR ? 99562500 : 27000000), .UART_BAUD(115200)
+        .CLOCK_HZ(27000000), .UART_BAUD(115200)
     ) soc (
         .clk(system_clk), .reset(processor_reset),
         .instruction_memory_valid(instruction_memory_valid),
@@ -191,8 +222,15 @@ module tang_primer_20k_soc #(
         end
         // LED0 boot released, LED1 memory responded, LED2 instruction retired,
         // LED3 nonzero GPIO, LED4 trap, LED5 reference clock heartbeat.
-        assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], trapped, gpio_seen,
-                        retired, fetched, boot_complete};
+        if (LED_STATUS == 2) begin : ddr_diagnostics
+            // LED0 PHY initialized, LED1 readback started, LED2 boot verified,
+            // LED3 CPU fetched, LED4 boot failure/trap, LED5 heartbeat.
+            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], boot_failed || trapped,
+                            fetched, boot_complete, boot_verifying, ddr_init_done};
+        end else begin : cpu_diagnostics
+            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], trapped || boot_failed, gpio_seen,
+                            retired, fetched, boot_complete};
+        end
     end else begin : gpio_leds
         assign led_n = ~gpio_value[5:0];
     end endgenerate

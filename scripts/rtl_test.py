@@ -12,12 +12,17 @@ ROOT = Path(__file__).resolve().parents[1]
 TESTS = {
     'boot_rom': ['verilog/memory/boot_rom.v', 'verilog/test/boot_rom_tb.v'],
     'core': ['verilog/core/register_file.v', 'verilog/core/decode.v',
-             'verilog/core/execute.v', 'verilog/core/core.v', 'verilog/test/core_tb.v'],
+             'verilog/core/execute.v', 'verilog/core/iterative_divider.v',
+             'verilog/core/core.v', 'verilog/test/core_tb.v'],
+    'core_m': ['verilog/core/register_file.v', 'verilog/core/decode.v',
+               'verilog/core/execute.v', 'verilog/core/iterative_divider.v',
+               'verilog/core/core.v', 'verilog/test/core_div_tb.v'],
     'cache': ['verilog/cache/cache.v', 'verilog/test/cache_tb.v'],
     'peripheral': ['verilog/peripheral/gpio.v', 'verilog/peripheral/uart_tx.v',
                    'verilog/peripheral/peripheral_bus.v', 'verilog/test/peripheral_tb.v'],
     'setsuna': ['verilog/core/register_file.v', 'verilog/core/decode.v',
-                'verilog/core/execute.v', 'verilog/core/core.v',
+                'verilog/core/execute.v', 'verilog/core/iterative_divider.v',
+                'verilog/core/core.v',
                 'verilog/cache/cache.v', 'verilog/peripheral/gpio.v',
                 'verilog/peripheral/uart_tx.v', 'verilog/peripheral/peripheral_bus.v',
                 'verilog/setsuna.v', 'verilog/test/setsuna_tb.v'],
@@ -26,6 +31,8 @@ TESTS = {
                     'verilog/memory/ddr3_bus_adapter.v',
                     'verilog/memory/dram_memory_subsystem.v',
                     'verilog/test/dram_memory_tb.v'],
+    'ddr_cdc': ['verilog/memory/ddr3_command_cdc.v', 'verilog/test/ddr_cdc_tb.v'],
+    'dram_boot': ['verilog/memory/dram_boot_loader.v', 'verilog/test/dram_boot_tb.v'],
 }
 
 
@@ -85,20 +92,22 @@ def main():
         if brams < 4:
             raise SystemExit('Cache data and tags did not both map to Gowin block RAM')
         print(f'PASS: cache data and tags mapped to {brams} Gowin block RAM cells')
-    if 'boot_rom' in tests:
+    for test_name, module in [('boot_rom', 'boot_rom'), ('dram_boot', 'dram_boot_loader')]:
+        if test_name not in tests:
+            continue
         # RTL simulation alone did not detect overlapping zero-fill/$readmemh
         # initialization being resolved differently by Yosys.
-        memory_json = (args.build_dir/'boot-rom-memory.json').resolve()
+        memory_json = (args.build_dir/(module+'-memory.json')).resolve()
         memory_script = (
-            'read_verilog -sv verilog/memory/boot_rom.v; '
+            f'read_verilog -sv verilog/memory/{module}.v; '
             'chparam -set IMAGE_WORDS 6 -set IMAGE_FILE '
-            '"fpga/tang-primer-20k/demo_program_sim.hex" boot_rom; '
-            'hierarchy -top boot_rom; proc; memory_collect; write_json ' +
+            f'"fpga/tang-primer-20k/demo_program_sim.hex" {module}; '
+            f'hierarchy -top {module}; proc; memory_collect; write_json ' +
             json.dumps(str(memory_json)))
-        with (args.build_dir/'boot-rom-memory.log').open('w') as log:
+        with (args.build_dir/(module+'-memory.log')).open('w') as log:
             subprocess.run([str(yosys), '-p', memory_script], cwd=ROOT,
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
-        cells = json.loads(memory_json.read_text())['modules']['boot_rom']['cells']
+        cells = json.loads(memory_json.read_text())['modules'][module]['cells']
         memories = [c for c in cells.values() if c['type'] == '$mem_v2']
         if len(memories) != 1:
             raise SystemExit('Expected one synthesized boot ROM')
@@ -109,7 +118,7 @@ def main():
         expected = [f'{w:064b}' for w in words] + ['0'*64] * (len(actual)-len(words))
         if actual != expected:
             raise SystemExit('Synthesized ROM initialization differs from program image/padding')
-        print('PASS: synthesized ROM contains exact program image and zero padding')
+        print(f'PASS: synthesized {module} ROM contains exact program image and zero padding')
     print(f'PASS: {len(tests)} RTL suites, integrated top compile, and Yosys structural check')
 
 

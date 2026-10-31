@@ -24,6 +24,15 @@ module tang_primer_20k_soc_tb;
         .BOOT_IMAGE_FILE("fpga/tang-primer-20k/demo_program_sim.hex"),
         .BOOT_IMAGE_WORDS(6), .RESET_CYCLES(4)
     ) diagnostic (.clk(clk), .led_n(status_led_n));
+    wire [5:0] ddr_led_n;
+    generate if (`SETSUNA_BOOT_FROM_DDR) begin : ddr_diagnostics
+        tang_primer_20k_soc #(
+            .SIMULATION(1), .LED_STATUS(2), .HEARTBEAT_BITS(4), .BOOT_FROM_DDR(1),
+            .BOOT_IMAGE_FILE("fpga/tang-primer-20k/demo_program_sim.hex"),
+            .BOOT_IMAGE_WORDS(6), .RESET_CYCLES(4)
+        ) ddr_status (.clk(clk), .led_n(ddr_led_n));
+    end else assign ddr_led_n = 6'b110000;
+    endgenerate
     reg heartbeat_seen = 0;
     always @(posedge clk) if (!status_led_n[5]) heartbeat_seen <= 1;
     always #5 clk = ~clk;
@@ -35,6 +44,8 @@ module tang_primer_20k_soc_tb;
         if (dut.trap_unused) $fatal(1, "CPU trapped during boot test");
         if (status_led_n[4:0] !== 5'b10000 || !heartbeat_seen)
             $fatal(1, "incorrect boot diagnostics: %b", status_led_n);
+        if (ddr_led_n[4:0] !== 5'b10000)
+            $fatal(1, "incorrect DDR diagnostics: %b", ddr_led_n);
         $display("PASS: boot_from_ddr=%0d increments LED counter 1 -> 2 -> 3", `SETSUNA_BOOT_FROM_DDR);
         $finish;
     end

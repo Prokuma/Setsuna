@@ -121,12 +121,13 @@ stalls, memory wait states, branch flushes, and precise stop/trap behavior.
 make test-rtl
 ```
 
-The test command runs five self-checking suites (core, cache, peripherals, the
-DDR-backed memory subsystem, and the integrated `setsuna` top), then runs a
+The test command runs nine self-checking suites (including the core's iterative
+RV64M divider, cache, peripherals, DDR clock-domain crossing and boot readback, and the
+integrated `setsuna` top), then runs a
 Yosys structural check. See
 [the RTL guide](docs/rtl.md) for the bus/MMIO contracts and the exact migration
 status. RV64GC migration is still in progress: C/A/F/D, CSR/trap execution, and
-a hardware-efficient multi-cycle M unit remain to be implemented.
+multiplier timing improvements remain to be implemented.
 
 ## Tang Primer 20K Dock
 
@@ -141,6 +142,7 @@ make deps
 make fpga-setup    # download, verify, and install locally under .tools/
 make fpga-doctor   # inspect actual tool versions
 make fpga-synth    # test and synthesize the CPU plus DDR3 controller
+make fpga-pack     # synthesize and report packed resources, without placement
 make fpga-build    # additionally place/route and generate setsuna.fs
 make fpga-scan     # list connected USB probes
 make fpga-detect   # read the FPGA's JTAG ID
@@ -165,18 +167,56 @@ programs requiring writable RAM/stack need the DDR backend. Both modes accept
 
 Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
 The default FPGA design copies a boot image into the onboard 128 MiB DDR3 and
-runs the Setsuna RV64I core at `0x80000000`. Its demo displays a six-bit binary
+reads every word back before releasing the Setsuna RV64IM core at `0x80000000`.
+The CPU runs at 27 MHz and crosses to the 99.5625 MHz DDR controller through a
+single-command handshake bridge. Readback mismatch or timeout keeps the CPU in reset.
+Its demo displays a six-bit binary
 counter through GPIO MMIO. A flat little-endian binary can be selected with
 `make fpga-build FPGA_PROGRAM=program.bin`. Outputs and logs are in
 `build/fpga/tang-primer-20k/`. Use `FPGA_DESIGN=blink` or the `fpga-blink-*`
 targets for the independent toolchain smoke test. `make fpga-flash` programs
 persistent Flash; it replaces the existing Flash contents.
 
-The CPU+DDR design currently reaches nextpnr packing at 16,514 LUT4s (79%), but the pinned
+The CPU+DDR design with M enabled and DDR diagnostic LEDs reaches nextpnr packing
+at 17,874 LUT4s (86%), 10/46 BSRAMs, and 4/12 MULT36X36 DSPs, but the pinned
 open-source nextpnr database has no placeable `DQS` BEL and stops before routing.
+`make fpga-pack` stops before placement and writes `packed.json`; it produces no
+programmable image or successful-build manifest.
 An experimental `FPGA_ARGS="--ddr-phy portable"` backend replaces the unsupported
 PHY cells and reaches placement/routing, but differential pads, read alignment,
-and timing at the actual 99.5625 MHz system clock remain unvalidated. Its packing
+and timing at the actual DDR clocks remain unvalidated. Its packing
 and normal programming are blocked. An explicit experimental SRAM load is available
 for saved images; see the guide. The standalone blink flow remains programmable.
 See the FPGA guide for the exact limitation and logs.
+
+To export a relocatable native-DDR project for a separately installed Gowin EDA:
+
+```sh
+make fpga-export-gowin  # default output: build/fpga/gowin-ddr (must be empty)
+python3 build/fpga/gowin-ddr/build.py --gw-sh /path/to/IDE/bin/gw_sh
+```
+
+This alternative preserves the upstream DLL/calibration logic and never programs
+hardware. Export is verified locally; the proprietary synthesis/place-and-route
+flow remains unverified until Gowin EDA is available. Review its timing reports
+before loading any resulting bitstream. See [the FPGA guide](docs/fpga.md).
+
+## Claude Code GitHub Actions
+
+`.github/workflows/` contains two [Claude Code](https://github.com/anthropics/claude-code-action)
+workflows:
+
+- `claude.yml`: responds when `@claude` appears in an issue, issue/PR comment,
+  or PR review. It fetches only `third_party/softfloat` and `third_party/riscv-tests`
+  so that `make -j4` and `make test` can run; FPGA tools and RTL simulators are not
+  installed on the runner.
+- `claude-code-review.yml`: reviews non-draft pull requests on open/update,
+  following the checklist in `AGENTS.md`.
+
+Setup (once per repository):
+
+1. Install the [Claude GitHub App](https://github.com/apps/claude) on this repository.
+2. Add the repository secret `CLAUDE_CODE_OAUTH_TOKEN` (generate it locally with
+   `claude setup-token`). To use an API key instead, add `ANTHROPIC_API_KEY` and
+   replace `claude_code_oauth_token:` with `anthropic_api_key:` in both workflows.
+3. Workflows run from the default branch, so merge them into `main` before use.
