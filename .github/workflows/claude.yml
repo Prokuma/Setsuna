@@ -46,4 +46,4 @@ jobs:
           additional_permissions: |
             actions: read
           claude_args: |
-            --allowedTools "Bash(make:*),Bash(python3:*),Bash(git:*),Bash(cc:*),Bash(gcc:*)"
+            --allowedTools "Bash(make:*),Bash(python3:*),Bash(git:*),Bash(cc:*),Bash(gcc:*),WebSearch,WebFetch"
