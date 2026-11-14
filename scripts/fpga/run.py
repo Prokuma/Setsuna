@@ -15,6 +15,43 @@ from setup import ROOT, LOCK, DDR_LOCK, host_key, install_path, sha256
 BOARD = ROOT / 'fpga/tang-primer-20k'
 
 
+# The CPU and controller clock aliases can change when Yosys flattens the top.
+DDR_CLOCKS = (
+    (27, {'clk', 'ddr_boot.command_bridge.source_clk'}),
+    (108, {'ddr_boot.controller_clk', 'ddr_boot.command_bridge.controller_clk'}),
+)
+
+
+def verify_ddr_timing(fmax, log):
+    applied = {}
+    if re.search(r'(?im)^ERROR:|\b[1-9][0-9]* hold/min time violation|\bunconstrained\b|'
+                 r'clock[^\n]*(?:not found|no match|does not match)', log):
+        raise SystemExit('2:1 DDR timing log contains a violation or missing constraint.')
+    for mhz, aliases in DDR_CLOCKS:
+        explicit = [(name, float(freq)) for name, freq in re.findall(
+            r"constraining clock net '([^']+)' to ([\d.]+) MHz", log)
+            if name in aliases]
+        clocks = [fmax[name] for name in aliases if name in fmax]
+        if (len(explicit) != 1 or abs(explicit[0][1] - mhz) >= 0.02 or
+                len(clocks) != 1 or abs(clocks[0]['constraint'] - mhz) >= 0.02 or
+                not clocks[0]['achieved'] >= clocks[0]['constraint']):
+            raise SystemExit(f'2:1 DDR timing not met or SDC not applied for {mhz} MHz.')
+        applied[explicit[0][0]] = explicit[0][1]
+    return {'applied_sdc_mhz': applied, 'hold_violations': False, 'unconstrained_warnings': False}
+
+
+def verify_ddr_dependency(path):
+    status = subprocess.check_output(
+        ['git', 'submodule', 'status', '--', str(path.relative_to(ROOT))],
+        cwd=ROOT, text=True)
+    if not re.fullmatch(r' [0-9a-f]{40} [^\n]+\n', status):
+        raise SystemExit('gowin-ddr3 is not at its pinned revision; run make deps.')
+    if subprocess.check_output(
+            ['git', '-C', str(path), 'status', '--porcelain'], text=True):
+        raise SystemExit('gowin-ddr3 contains local changes; use the clean pinned revision.')
+    return status.split()[0]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['doctor', 'sim', 'synth', 'pack', 'build', 'scan', 'detect',
@@ -220,7 +257,10 @@ def main():
     wrapper_2to1 = BOARD / 'gowin_ddr3_2to1.sv'
     upstream_cst = upstream_2to1 / 'examples/tang-primer-20k.cst'
     clock_constraints = BOARD / ('clocks-2to1.sdc' if using_2to1 else 'clocks.sdc')
-    if using_2to1 and args.action in ('synth', 'pack', 'build', 'program', 'flash'):
+    ddr_revision = None
+    if using_2to1 and args.action in ('doctor', 'synth', 'pack', 'build', 'program', 'flash'):
+        ddr_revision = verify_ddr_dependency(upstream_2to1)
+        print(f'gowin-ddr3: {ddr_revision}', flush=True)
         if not upstream_cst.is_file():
             parser.error('gowin-ddr3 submodule unavailable; run make deps')
         ddr_sources = [wrapper_2to1]
@@ -330,7 +370,7 @@ def main():
                                              if not line.startswith(('IO_LOC "ddr_', 'IO_PORT "ddr_'))) + '\n')
         route_options = (['--pack-only'] if pack_only else ['--report', out / 'timing.json'])
         netlist_output = out / ('packed.json' if pack_only else 'routed.json')
-        run('nextpnr-himbaechel', *timing_options, '--json', out / 'synth.json', '--write', netlist_output,
+        pnr_log = run('nextpnr-himbaechel', *timing_options, '--json', out / 'synth.json', '--write', netlist_output,
             '--device', 'GW2A-LV18PG256C8/I7', '--vopt', 'family=GW2A-18',
             '--vopt', 'cst=' + str(constraints), '--freq', '27', '--seed', str(args.seed),
             '--router', args.router,
@@ -343,12 +383,7 @@ def main():
                              'read capture validation are required before packing/programming.')
         if using_2to1:
             fmax = json.loads((out / 'timing.json').read_text())['fmax']
-            missing = [mhz for mhz in (27, 108)
-                       if not any(abs(clock['constraint'] - mhz) < 0.02 and
-                                  clock['achieved'] >= clock['constraint']
-                                  for clock in fmax.values())]
-            if missing:
-                raise SystemExit(f'2:1 DDR timing not met or not reported for: {missing} MHz')
+            timing_check = verify_ddr_timing(fmax, pnr_log)
         run('gowin_pack', '-c', '-d', 'GW2A-18', '-o', bitstream,
             out / 'routed.json', log='pack.log')
         report = {'timestamp_utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -359,6 +394,10 @@ def main():
                   'ddr_controller_clock_mhz': (108 if using_2to1 else 99.5625) if using_ddr else None,
                   'ddr_clock_cdc': using_ddr,
                   'routed_fmax': fmax if using_2to1 else None,
+                  'ddr_revision': ddr_revision,
+                  'ddr_timing_check': timing_check if using_2to1 else None,
+                  'nextpnr_log_sha256': sha256(out / 'nextpnr.log') if using_2to1 else None,
+                  'timing_json_sha256': sha256(out / 'timing.json') if using_2to1 else None,
                   'boot_readback_enabled': using_ddr,
                   'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
                   'cache_lines': args.cache_lines if args.design == 'cpu' else None,
@@ -411,6 +450,16 @@ def main():
                 raise SystemExit('Bitstream DDR PHY differs from requested PHY.')
             if using_2to1 and manifest.get('suite') != expected:
                 raise SystemExit('Bitstream does not use the pinned 2:1 toolchain.')
+            if using_2to1:
+                log_path, timing_path = out / 'nextpnr.log', out / 'timing.json'
+                if any(not path.is_file() or sha256(path) != manifest.get(key)
+                       for path, key in ((log_path, 'nextpnr_log_sha256'),
+                                         (timing_path, 'timing_json_sha256'))):
+                    raise SystemExit('DDR timing evidence missing or changed; rebuild required.')
+                fmax = json.loads(timing_path.read_text())['fmax']
+                check = verify_ddr_timing(fmax, log_path.read_text())
+                if fmax != manifest.get('routed_fmax') or check != manifest.get('ddr_timing_check'):
+                    raise SystemExit('DDR timing evidence differs from manifest; rebuild required.')
             if args.design == 'cpu' and manifest.get('boot_mode', 'ddr') != args.boot_mode:
                 raise SystemExit('Bitstream boot mode differs from requested mode; select the correct build.')
             if args.design == 'cpu' and manifest.get('led_mode', 'gpio') != args.led_mode:

@@ -220,9 +220,9 @@ heartbeat、LED0/1/4が点灯し、ROM応答後・命令retire前のトラップ
 配線後Fmax 65.97 MHzで27 MHz制約PASS、SRAM書き込み100%・終了コード0を確認した。
 修正後、ユーザーがLEDの2進カウントを実機で確認した。ROMからの命令取得、CPU実行、GPIO更新まで動作確認済み。
 
-### 現行OSSフローのDDR3制限
+### 旧native PHYのOSSフロー制限
 
-2026-10-19にnative PHY、RV64M有効、I/D各256ライン、DDR診断LEDで再検証した。
+2026-10-19の旧構成でnative PHY、RV64M有効、I/D各256ライン、DDR診断LEDで再検証した。
 Yosys合成はLUT4 7,549、cache用`SDPX9B` 8個、boot image用`SPX9` 2個、
 `MULT36X36` 4個。nextpnr packingはLUT4 17,874 / 20,736（86%）、
 DFF 4,863 / 15,552（31%）、BSRAM 10 / 46（21%）、`MULT36X36` 4 / 12（33%）。
@@ -274,7 +274,33 @@ make fpga-load
 Apple Silicon MacのビルドとTang Primer 20K + Dockで、SRAMへの書き込み100%と
 CPUのUART出力 `Setsuna ready` を確認した。nextpnr配線後はCPU 55.58 MHz / 要求27 MHz、
 DDR 115.39 MHz / 要求108 MHz。使用量はLUT4 16,958 / 20,736、BSRAM 10 / 46。
-M有効・各256ラインの比較はLUT4 20,052 / 20,736で、合法配置を見つけられなかった。
+`--enable-m` だけを指定すると各256ラインのままビルドを試す。初回の2:1構成
+（起動ROMをBSRAMに置いた版）ではLUT4 20,052 / 20,736で合法配置を見つけられず、
+配線後のタイミングやbitstreamには到達していない。LUT化後はpackingまで確認し、LUT4 19,137 / 20,736、DFF 5,969、BSRAM 8。
+この構成の配線後タイミングや実機は未確認。自動でM無効化やキャッシュ縮小はしない。
+実機確認済みのM有効構成は後述の各32ライン。ROM/旧PHYではMが既定で有効なため、
+保存済みbitstreamをロードする際は起動先・PHY・M・ライン数をビルド時と揃える。
+
+起動ROMのLUT化前後の既定構成（RV64I・各256ライン・GPIOデモ）のnextpnr packing比較:
+
+| 起動ROM | LUT4 | DFF | BSRAM |
+| --- | ---: | ---: | ---: |
+| BSRAM | 16,958 | 5,714 | 10 |
+| LUT | 19,637 | 5,700 | 8 |
+
+後者はpackingまでの測定で、上記の実機結果と配線後タイミングは前者に対応する。
+ローダー単体の `synth_gowin` 境界試験では32語がBSRAM 0 / LUT4 144 / DFF 96、
+33語がBSRAM 2 / LUT4 57 / DFF 38。合成後のセルを数えて判定する。
+
+`fpga-build` はnextpnrの正常終了に加えてSDCが27/108 MHz両方に適用された記録と
+配線後の結果を確認する。ホールド違反や未制約の報告を拒否し、検査結果とログ・
+タイミング報告書のハッシュをmanifestへ記録する。`fpga-load` はこれらを再検査する。
+旧manifestは再ビルドが必要。`fpga-pack` は配置配線を行わず、bitstreamや
+ロード可能なmanifestを生成しないため、配線後のタイミング判定の対象外。
+
+`third_party/gowin-ddr3` は Apache-2.0（同ディレクトリーの `LICENSE` を参照）。
+`fpga-doctor` とビルドはサブモジュールがgitlinkの固定コミットと一致し、
+作業ツリーがクリーンであることを確認する。
 Flashは書き換えていない。起動とデモの実行は確認済みだが、128 MiB全域の検査は別途必要。
 
 #### RV64IM・I/D各32ラインの実機試験
@@ -385,7 +411,7 @@ make fpga-build FPGA_ARGS='--ddr-phy portable'
 
 試作ではDQS配置エラーを回避し、LUT4 13,914 / 20,736（67%）、DFF 4,044 / 15,552（26%）で
 配置配線まで到達した。ただし当初の27 MHz一律制約は誤りで、実際のPLL出力は
-398.25 MHz、CPU/controllerは99.5625 MHzである。旧結果のsystem Fmaxは69.35 MHzであり、
+398.25 MHz、当時のCPU/controller共通クロックは99.5625 MHzだった。旧結果のsystem Fmaxは69.35 MHzであり、
 実クロックでのtiming closureを示していない。現在は`clocks.sdc`で各周波数を指定する。
 同じ合成netlistを新制約で再配置配線した結果もsystem Fmaxは69.35 MHzで、
 要求99.57 MHz（ツールのperiod丸め後）に対してFAIL、nextpnr終了コード1となった。
@@ -409,7 +435,7 @@ python3 scripts/fpga/run.py load --design cpu --ddr-phy portable --experimental-
 `ec5a3318c73fde6eb027d97d5c179a50886744e195ccfdd85d83fe36f1a0336d`。
 `program.log`と`program-manifest.json`に書き込み結果・実験フラグを記録する。
 
-次に必要な実装・検証:
+旧portable PHYを再検証する場合に残る作業:
 
 - CK/DQSの正負ピンをRTLから明示し、SSTL15差動出力・tristateを実装する。
 - read burstの取り込み窓とword alignmentをPHYレベルのテストで検証する。
