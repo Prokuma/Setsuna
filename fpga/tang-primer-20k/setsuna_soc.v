@@ -3,7 +3,7 @@
 `define SETSUNA_BOOT_IMAGE "fpga/tang-primer-20k/demo_program.hex"
 `endif
 `ifndef SETSUNA_BOOT_WORDS
-`define SETSUNA_BOOT_WORDS 6
+`define SETSUNA_BOOT_WORDS 12
 `endif
 
 `ifndef SETSUNA_LED_STATUS
@@ -40,7 +40,14 @@ module tang_primer_20k_soc #(
     output wire [5:0]  led_n,
     inout  wire [15:0] ddr_dq,
     inout  wire [1:0]  ddr_dqs,
+`ifdef SETSUNA_GOWIN_DDR3
+    output wire [13:0] ddr_addr,
+    output wire        ddr_ck_n,
+    inout  wire [1:0]  ddr_dqs_n,
+    output wire        uart_tx,
+`else
     output wire [12:0] ddr_addr,
+`endif
     output wire [2:0]  ddr_bank,
     output wire        ddr_cs_n,
     output wire        ddr_ras_n,
@@ -58,6 +65,7 @@ module tang_primer_20k_soc #(
     wire power_reset = reset_count < RESET_CYCLES;
     wire system_clk;
     wire ddr_init_done;
+    wire ddr_calibration_failed;
     wire boot_complete;
     wire boot_verifying;
     wire boot_failed;
@@ -105,8 +113,21 @@ module tang_primer_20k_soc #(
     wire [25:0] phy_address;
     wire [15:0] phy_write_data, phy_read_data;
     assign system_clk = clk;
+`ifdef SETSUNA_GOWIN_DDR3
+    wire calib_fail_async;
+    (* async_reg = "true" *) reg [1:0] calib_fail_sync = 0;
+    always @(posedge clk)
+        calib_fail_sync <= power_reset ? 2'b0 : {calib_fail_sync[0], calib_fail_async};
+    assign ddr_calibration_failed = calib_fail_sync[1];
+    setsuna_gowin_ddr3_2to1 physical_memory (
+        .board_reset(power_reset), .calibration_failed(calib_fail_async),
+        .ddr_ck_n(ddr_ck_n), .ddr_dqs_n(ddr_dqs_n),
+`else
+    assign ddr_calibration_failed = 1'b0;
     tang_primer_20k_ddr3 #(.SIMULATION(SIMULATION)) physical_memory (
-        .clk27(clk), .reset(power_reset), .system_clk(controller_clk),
+        .reset(power_reset),
+`endif
+        .clk27(clk), .system_clk(controller_clk),
         .init_done(phy_init_done), .read_command(phy_read),
         .write_command(phy_write), .refresh_command(phy_refresh),
         .address(phy_address), .write_data(phy_write_data),
@@ -159,6 +180,11 @@ module tang_primer_20k_soc #(
         assign boot_failed = 1'b0;
         assign boot_error_code = 0;
         assign ddr_init_done = 1'b0;
+        assign ddr_calibration_failed = 1'b0;
+`ifdef SETSUNA_GOWIN_DDR3
+        assign ddr_ck_n = 1'b1;
+        assign ddr_dqs_n = 2'bz;
+`endif
         assign ddr_dq = 16'bz;
         assign ddr_dqs = 2'bz;
         assign ddr_addr = 0;
@@ -206,6 +232,10 @@ module tang_primer_20k_soc #(
         .trap_cause(trap_cause_unused)
     );
 
+`ifdef SETSUNA_GOWIN_DDR3
+    assign uart_tx = uart_tx_unused;
+`endif
+
     generate if (LED_STATUS) begin : status_leds
         reg [HEARTBEAT_BITS-1:0] heartbeat = 0;
         reg fetched = 0, retired = 0, gpio_seen = 0, trapped = 0;
@@ -225,10 +255,10 @@ module tang_primer_20k_soc #(
         if (LED_STATUS == 2) begin : ddr_diagnostics
             // LED0 PHY initialized, LED1 readback started, LED2 boot verified,
             // LED3 CPU fetched, LED4 boot failure/trap, LED5 heartbeat.
-            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], boot_failed || trapped,
+            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], ddr_calibration_failed || boot_failed || trapped,
                             fetched, boot_complete, boot_verifying, ddr_init_done};
         end else begin : cpu_diagnostics
-            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], trapped || boot_failed, gpio_seen,
+            assign led_n = ~{heartbeat[HEARTBEAT_BITS-1], ddr_calibration_failed || trapped || boot_failed, gpio_seen,
                             retired, fetched, boot_complete};
         end
     end else begin : gpio_leds

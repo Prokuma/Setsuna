@@ -24,7 +24,10 @@ module dram_boot_loader #(
     localparam integer INDEX_BITS = IMAGE_WORDS <= 1 ? 1 : $clog2(IMAGE_WORDS);
     localparam integer TIMEOUT_BITS = TIMEOUT_CYCLES <= 1 ? 1 : $clog2(TIMEOUT_CYCLES);
     localparam LOAD = 2'd0, WRITE = 2'd1, READ = 2'd2;
-    (* ram_style = "block" *) reg [63:0] image [0:IMAGE_WORDS-1];
+    // A tiny boot image fits in logic. Keep larger images in BRAM so the
+    // startup copy does not consume the LUT budget needed by the CPU.
+    localparam IMAGE_RAM_STYLE = IMAGE_WORDS <= 32 ? "logic" : "block";
+    (* ram_style = IMAGE_RAM_STYLE *) reg [63:0] image [0:IMAGE_WORDS-1];
     reg [63:0] image_data;
     reg [INDEX_BITS-1:0] index;
     reg [TIMEOUT_BITS-1:0] timeout_count;

@@ -37,8 +37,10 @@ TESTS = {
 
 
 def suite_tools():
-    lock_path = ROOT / 'scripts/fpga/oss-cad-suite.lock.json'
-    if lock_path.exists():
+    for lock_name in ('oss-cad-suite.lock.json', 'oss-cad-suite-ddr.lock.json'):
+        lock_path = ROOT / 'scripts/fpga' / lock_name
+        if not lock_path.exists():
+            continue
         lock = json.loads(lock_path.read_text())
         system = {'Darwin': 'darwin', 'Linux': 'linux'}.get(platform.system())
         machine = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'x64'}.get(platform.machine())

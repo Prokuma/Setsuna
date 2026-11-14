@@ -131,8 +131,8 @@ multiplier timing improvements remain to be implemented.
 
 ## Tang Primer 20K Dock
 
-The FPGA smoke test uses the official **OSS CAD Suite 2026-09-22** release,
-pinned by platform-specific SHA-256 checksums. Setup supports ARM64/x86-64 macOS
+The default DDR build uses **OSS CAD Suite 2026-11-12**. ROM and blink
+use **2026-09-22**. Both official releases are pinned by platform-specific SHA-256 checksums. Setup supports ARM64/x86-64 macOS
 and Linux; ARM Mac synthesis and SRAM programming have been verified on hardware.
 Prerequisites: Git, Make, curl, and Python 3.12+ (or a version with
 `tarfile.data_filter` backported). See [the FPGA guide](docs/fpga.md) for details.
@@ -153,6 +153,7 @@ make fpga-load     # load the last verified build without rebuilding
 Select the boot backend at build time (default: DDR):
 
 ```sh
+make fpga-setup FPGA_BOOT=rom
 make fpga-sim FPGA_BOOT=rom
 make fpga-build FPGA_BOOT=rom
 make fpga-load FPGA_BOOT=rom
@@ -167,22 +168,25 @@ programs requiring writable RAM/stack need the DDR backend. Both modes accept
 
 Connect the Dock's JTAG USB port and allow the accessory when macOS prompts.
 The default FPGA design copies a boot image into the onboard 128 MiB DDR3 and
-reads every word back before releasing the Setsuna RV64IM core at `0x80000000`.
-The CPU runs at 27 MHz and crosses to the 99.5625 MHz DDR controller through a
+reads every word back before releasing the Setsuna RV64I core at `0x80000000`.
+The CPU runs at 27 MHz and crosses to the 108 MHz DDR controller through a
 single-command handshake bridge. Readback mismatch or timeout keeps the CPU in reset.
-Its demo displays a six-bit binary
-counter through GPIO MMIO. A flat little-endian binary can be selected with
+The default DDR demo prints `Setsuna ready` on the Dock UART (115200 8N1)
+and displays a six-bit binary counter through GPIO MMIO. DDR boot was verified on
+a Tang Primer 20K + Dock by capturing the demo’s UART message. The ROM build
+keeps M enabled; the default DDR build leaves it off to fit the FPGA. Select
+a flat little-endian binary with
 `make fpga-build FPGA_PROGRAM=program.bin`. Outputs and logs are in
 `build/fpga/tang-primer-20k/`. Use `FPGA_DESIGN=blink` or the `fpga-blink-*`
 targets for the independent toolchain smoke test. `make fpga-flash` programs
 persistent Flash; it replaces the existing Flash contents.
 
-The CPU+DDR design with M enabled and DDR diagnostic LEDs reaches nextpnr packing
-at 17,874 LUT4s (86%), 10/46 BSRAMs, and 4/12 MULT36X36 DSPs, but the pinned
-open-source nextpnr database has no placeable `DQS` BEL and stops before routing.
+The default DDR backend uses the pinned `third_party/gowin-ddr3` submodule
+and its calibrated 2:1 PHY. The historical `FPGA_PHY=native` path still stops
+at the unsupported dedicated DQS cell in the older open toolchain.
 `make fpga-pack` stops before placement and writes `packed.json`; it produces no
 programmable image or successful-build manifest.
-An experimental `FPGA_ARGS="--ddr-phy portable"` backend replaces the unsupported
+An experimental `FPGA_PHY=portable` backend replaces the unsupported
 PHY cells and reaches placement/routing, but differential pads, read alignment,
 and timing at the actual DDR clocks remain unvalidated. Its packing
 and normal programming are blocked. An explicit experimental SRAM load is available

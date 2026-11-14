@@ -175,8 +175,8 @@ CPU/cache/boot adapterは27 MHz、PHY/controllerは別クロックで、16-bit c
 toggle handshakeで接続する。payloadを応答まで保持し、制御信号は2段同期する。
 両ドメインのresetは同時にassertし、それぞれで同期解除する。シミュレーションだけでは
 メタステビリティ、payloadの物理伝搬時間、同期FFの配置は検証できない。
-現行OSS CAD SuiteではDQS primitiveを
-nextpnrが配置できないため、CPU+DDR版の実機bitstream生成は配置前で停止する。
+既定DDR版は108 MHzのgowin-ddr3 2:1 PHYを使用し、読み出し校正が成功してから
+起動イメージを転送する。従来のnative PHYは専用DQSセルの配置で停止する。
 実験用portable PHYは通常OSER8とfabric入力へ置換するが、物理PHYの検証は未完了。
 `fpga-sim`の成功は物理DDR接続の成功を意味しない。詳細は[FPGAガイド](fpga.md)を参照。
 既存の`fpga/tang-primer-20k/blink.v`はFPGAツール経路を検証する独立した回路。

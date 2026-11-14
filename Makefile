@@ -36,15 +36,16 @@ clean:
 
 FPGA_DESIGN ?= cpu
 FPGA_BOOT ?= ddr
+FPGA_PHY ?= gowin-ddr3
 FPGA_PROGRAM ?=
 FPGA_PROGRAM_ARG = $(if $(FPGA_PROGRAM),--program "$(FPGA_PROGRAM)")
 .PHONY: fpga-setup fpga-doctor fpga-sim fpga-synth fpga-pack fpga-build fpga-scan fpga-detect fpga-program fpga-load fpga-flash fpga-blink-build fpga-blink-program fpga-export-gowin
 fpga-setup:
-	python3 scripts/fpga/setup.py
+	python3 scripts/fpga/setup.py $(if $(and $(filter cpu,$(FPGA_DESIGN)),$(filter ddr,$(FPGA_BOOT)),$(filter gowin-ddr3,$(FPGA_PHY))),--ddr-2to1)
 fpga-export-gowin:
 	python3 scripts/fpga/export_gowin.py $(FPGA_PROGRAM_ARG) $(FPGA_ARGS)
 fpga-doctor fpga-sim fpga-synth fpga-pack fpga-build fpga-scan fpga-detect fpga-program fpga-load fpga-flash:
-	python3 scripts/fpga/run.py $(patsubst fpga-%,%,$@) --design $(FPGA_DESIGN) --boot-mode $(FPGA_BOOT) $(FPGA_PROGRAM_ARG) $(FPGA_ARGS)
+	python3 scripts/fpga/run.py $(patsubst fpga-%,%,$@) --design $(FPGA_DESIGN) --boot-mode $(FPGA_BOOT) --ddr-phy $(FPGA_PHY) $(FPGA_PROGRAM_ARG) $(FPGA_ARGS)
 fpga-blink-build:
 	python3 scripts/fpga/run.py build --design blink $(FPGA_ARGS)
 fpga-blink-program:

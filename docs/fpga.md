@@ -23,15 +23,17 @@ make fpga-setup
 make fpga-doctor
 ```
 
-`make fpga-setup`は`oss-cad-suite.lock.json`に記録した日付付きリリースを選び、
+`make fpga-setup`は選択した構成のlockファイルに記録した日付付きリリースを選び、
 OS/CPUに合うアーカイブを取得する。サイズとSHA-256が一致した場合だけ展開する。
 途中で切断したダウンロードは`.part`から再開する。取得元は公式GitHub Releasesのみ。
 
-現在の固定リリースは **2026-09-22**。配置先:
+既定のDDR版は **2026-11-12**（`oss-cad-suite-ddr.lock.json`）。
+ROM/blink/旧PHYは **2026-09-22**（`oss-cad-suite.lock.json`）。
+ROM用のセットアップは `make fpga-setup FPGA_BOOT=rom`。配置先:
 
 ```text
 .tools/cache/                                      # 検証対象アーカイブ
-.tools/oss-cad-suite/2026-09-22/<host>/oss-cad-suite/  # ツール本体
+.tools/oss-cad-suite/<release>/<host>/oss-cad-suite/ # ツール本体
 ```
 
 システム全体へのインストールやシェル設定の書き換えは行わない。
@@ -41,7 +43,8 @@ upstreamのnextpnrラッパーはユーザーの`.config/yosyshq`と`.local/shar
 実行環境がこれらを制限する場合は書き込み許可が必要。
 
 `third_party/oss-cad-suite-build`はビルド定義の参照用submoduleとして固定している。
-DDR3 PHY/controllerは`third_party/ddr3-tang-primer-20k` submoduleに固定している。
+DDR3 PHY/controllerは既定版を`third_party/gowin-ddr3`、旧版を
+`third_party/ddr3-tang-primer-20k`のsubmoduleに固定している。
 既存checkoutでは`make deps`または次のコマンドで取得する。
 
 ```sh
@@ -65,19 +68,19 @@ boot loader、16-bit DDR command adapter、Tang Primer 20Kの128 MiB DDR3 contro
 電源投入後は96 KiBまでのblock RAM boot imageをDDR3の`0x80000000`へコピーし、
 全ワードを読み返してROMと照合した後にCPU resetを解除する。応答timeoutまたは
 不一致ではresetを保持する。既定のRV64IデモはGPIO MMIOを介して6個のactive-low LEDへ
-0〜63の2進カウンタを表示する。Tang Primer 20K構成はRV64Mを有効にし、
-乗算をDSP、除算・剰余を反復演算器で実装する。比較用に`FPGA_ARGS='--disable-m'`を指定できる。
-同じ256ライン構成のYosys合成では、M無効がLUT4 6,458・DSP 0、M有効が
+0〜63の2進カウンタを表示する。既定の2:1 DDR版はRV64I、ROM版はRV64IM。
+M拡張は乗算をDSP、除算・剰余を反復演算器で実装する。
+比較には `FPGA_ARGS='--enable-m'` または `FPGA_ARGS='--disable-m'` を使う。
+旧native PHYを使った比較では、同じ256ライン構成のYosys合成で、M無効がLUT4 6,458・DSP 0、M有効が
 LUT4 7,395・`MULT36X36` 4個となった。M有効のDDR版もLUT4 8,427・
-`MULT36X36` 4個で合成を通過した。DDRの配置配線は後述のDQS制限が残る。
+`MULT36X36` 4個で合成を通過した。旧native PHYの配置配線には後述のDQS制限が残る。
 M有効のROM起動版は配置配線とbitstream生成まで成功した。nextpnr結果は
 LUT4 17,468 / 20,736（84%）、DFF 4,323 / 15,552（27%）、
 BSRAM 12 / 46（26%）、`MULT36X36` 4 / 12（33%）、ALU 1,400 / 15,552（9%）。
 配線後Fmaxは68.44 MHzで27 MHz制約を満たした。
 以前はDDR起動時のCPU/controller共通clockが約99.56 MHzだった。
-2026-10-19の変更でCPU/cache/boot adapterは27 MHz、DDR controllerは99.5625 MHzへ分離した。
-ROM版のタイミング結果をDDR版へそのまま適用できず、DDR PHY配置問題の解消後に
-各clockとCDC経路のタイミングを測定する必要がある。
+CPU/cache/boot adapterは27 MHz。既定のgowin-ddr3 PHY/controllerは108 MHzで、
+既存の16ビットコマンドCDCを介して接続する。
 `make fpga-sim`はDDRモデルへのboot image転送後、LED表示が1、2、3へ進むまでを検証する。
 I/Dキャッシュは各2 KiBで、`FPGA_ARGS='--cache-lines 32'`のようにライン数を変更できる。
 データとタグはBSRAMに置き、valid/dirtyだけをFFに保持する。
@@ -97,7 +100,9 @@ make fpga-build FPGA_PROGRAM=program.bin
 ```
 
 `demo_program.S`は既定hexの可読な命令列である。実機用`demo_program.hex`と高速な
-testbench用`demo_program_sim.hex`は待ち時間だけが異なる。
+testbench用`demo_program_sim.hex`は短い待ち時間のLED専用版。
+実機用デモはDock UARTで `Setsuna ready` を送ってからカウンターを開始する。
+UARTは既定の2:1 DDR版で有効（115200 8N1）。
 
 独立したツールチェーン確認用blink回路も残している。
 
@@ -133,6 +138,7 @@ make fpga-blink-program
 Pythonの同等指定は`--boot-mode ddr|rom`。スイッチによる実行中の切り替えではない。
 
 ```sh
+make fpga-setup FPGA_BOOT=rom
 make fpga-sim FPGA_BOOT=rom
 make fpga-build FPGA_BOOT=rom
 make fpga-load FPGA_BOOT=rom
@@ -190,7 +196,7 @@ make fpga-synth FPGA_ARGS='--led-mode ddr'
 | 1 | boot imageのreadback段階へ進んだ |
 | 2 | 全ワードの照合が完了しCPU resetを解除した |
 | 3 | CPUの命令要求にメモリが応答した |
-| 4 | boot失敗またはCPU trap |
+| 4 | 校正失敗、boot失敗、またはCPU trap |
 | 5 | 27 MHz基準のheartbeat |
 
 `boot_error_code`は1=データ不一致、2=書き込み/初期化待ちtimeout、3=読み出しtimeout。
@@ -252,6 +258,84 @@ Apicula対応欄が空である。nextpnrのGW2A-18/18C chip databaseにも利�
 この構成の配置配線とbitstream生成は完了できない。`make fpga-synth`はこの未対応部分より前の
 再現可能な到達点として用意している。
 
+### Setsunaの2:1 DDR起動（実機確認）
+
+```sh
+make deps
+make fpga-setup
+make fpga-build
+make fpga-load
+```
+
+既定は `FPGA_PHY=gowin-ddr3`、I/D各256ライン、RV64I。108 MHzのDDRは校正成功後に
+コマンドを受け付け、27 MHzのCPUは起動イメージ全体の照合後に動き始める。
+上流の差動I/O設定と校正をそのまま使い、SetsunaのコマンドCDCとreadbackを維持する。
+
+Apple Silicon MacのビルドとTang Primer 20K + Dockで、SRAMへの書き込み100%と
+CPUのUART出力 `Setsuna ready` を確認した。nextpnr配線後はCPU 55.58 MHz / 要求27 MHz、
+DDR 115.39 MHz / 要求108 MHz。使用量はLUT4 16,958 / 20,736、BSRAM 10 / 46。
+M有効・各256ラインの比較はLUT4 20,052 / 20,736で、合法配置を見つけられなかった。
+Flashは書き換えていない。起動とデモの実行は確認済みだが、128 MiB全域の検査は別途必要。
+
+#### RV64IM・I/D各32ラインの実機試験
+
+起動イメージが256バイト以下の場合はローダー内のROMをLUTで実装し、
+大きいイメージとキャッシュはBSRAMに残す。試験イメージで発生した
+起動ROMのBSRAM入力へのホールド違反を、この構成で回避した。
+
+```sh
+mkdir -p build
+riscv64-unknown-elf-gcc -march=rv64im -mabi=lp64 -nostdlib \
+    -Wl,-Ttext=0x80000000,--no-relax -o build/ddr-m-smoke.elf \
+    fpga/tang-primer-20k/ddr_m_smoke.S
+riscv64-unknown-elf-objcopy -O binary -j .text build/ddr-m-smoke.elf build/ddr-m-smoke.bin
+make fpga-build FPGA_PROGRAM=build/ddr-m-smoke.bin \
+    FPGA_ARGS='--enable-m --cache-lines 32 --seed 2 --router router1 --build-dir build/fpga/ddr-m-smoke'
+make fpga-load FPGA_ARGS='--enable-m --cache-lines 32 --build-dir build/fpga/ddr-m-smoke'
+```
+
+DDRから起動し、`MUL`・`DIV`・`REM`の結果が一致した場合にだけ、Dock UARTで
+`Setsuna DDR M PASS`を送信する。実機でこの出力を確認した。配線後の評価は
+DDR 123.09 MHz / 要求108 MHz、CPU 55.57 MHz / 要求27 MHz、ホールド違反なし。
+使用量はLUT4 17,146 / 20,736、BSRAM 8 / 46、MULT36X36 4 / 12。
+
+### OSS版2:1 PHYの上流サンプル（2026-11-14）
+
+[e-karge/gowin-ddr3](https://github.com/e-karge/gowin-ddr3) の
+`84a1a11681082fa599c61d3445ee173bc60ae659` にある
+`tang-primer-20k-2to1` を、SetsunaのRTLから分離してビルドした。
+このPHYは専用DQSセルを使わず、ODDR・IDDR・IODELAYと起動時の読み出し校正を使う。
+
+| Apple Silicon向けOSS CAD Suite | 単体サンプルの結果 |
+| --- | --- |
+| `2026-09-22`（Setsunaの固定版） | 合成は成功。nextpnrは汎用セル `$buf` の配置で停止。Yosysで `techmap; opt_clean` を追加すると配置を通過したが、`phy.dly_dec[1]` の配線で例外終了した。低速版は同じ正規化後、27 MHz指定でbitstream生成まで成功。 |
+| `2026-11-12`（比較用） | 汎用 `$buf` は出力されず、上流RTLの変更なしでbitstream生成まで成功。配線後のnextpnr内部クロック評価は **155.98 MHz / 要求108 MHz**。 |
+
+再現には、[公式リリース](https://github.com/YosysHQ/oss-cad-suite-build/releases/tag/2026-11-12)の
+`oss-cad-suite-darwin-arm64-20261112.tgz` を使用する。SHA-256は
+`c55b14ff77bedc83f1cca218347c320d8d09d6b856634b071e3f977595cf79b8`。
+確認後に既存の固定版と別の場所に展開し、`SUITE_BIN` にその `bin` の絶対パスを指定する。
+
+```sh
+git clone https://github.com/e-karge/gowin-ddr3.git
+cd gowin-ddr3
+git checkout --detach 84a1a11681082fa599c61d3445ee173bc60ae659
+cd examples/tang-primer-20k-2to1
+mkdir -p build
+cat > build/clocks.sdc <<'EOF'
+create_clock -name reference -period 37.037037 [get_ports {clk}]
+create_clock -name ddr -period 9.259259 [get_nets {clocks.clk}]
+EOF
+make YOSYS="$SUITE_BIN/yosys" NEXTPNR="$SUITE_BIN/nextpnr-himbaechel" \
+     GOWIN_PACK="$SUITE_BIN/gowin_pack" \
+     NEXTPNR_FLAGS='--sdc build/clocks.sdc --freq 108 --report build/timing.json'
+```
+
+出力は `build/top.fs`。内部クロックの評価はDDR I/Oの読み書きを保証しない。
+Tang Primer 20K + Dockの実機でSRAMへの書き込みが完了し、DockのUART（115200 8N1）で
+`calib ok   delays 1b 1b` と、メモリ試験の連続5パスで `errors 00000000` を確認した。
+この結果は上流サンプル単体のもの。Setsunaとの統合版では別途起動を検証する。
+
 ### Gowin EDAへ出力する代替経路
 
 OSSフローは維持し、DQS/DLLの対応があるGowin EDAへ渡すプロジェクトを出力できる。
@@ -288,7 +372,7 @@ Gowinコマンドの実行とvendor timing解析はツール導入後の検証�
 
 `FPGA_ARGS='--ddr-phy portable'`で、DQS専用セルを通常のOSER8とfabricの
 両エッジサンプリングへ置き換えた試作を選択できる。upstream submoduleは変更せず、
-ビルド先の`ddr3_controller_yosys.v`を生成する。既定は`native`のままとする。
+ビルド先の`ddr3_controller_yosys.v`を生成する。現在の既定値は`gowin-ddr3`。
 
 ```sh
 make fpga-synth FPGA_ARGS='--ddr-phy portable'
@@ -318,7 +402,7 @@ portableの通常pack/programは実装側で停止させる。
 保証しない。再現コマンドは以下で、実験オプションはCPUのSRAMロードだけに限定する。
 
 ```sh
-python3 scripts/fpga/run.py load --design cpu --experimental-load
+python3 scripts/fpga/run.py load --design cpu --ddr-phy portable --experimental-load
 ```
 
 実験時のbitstream SHA-256は
