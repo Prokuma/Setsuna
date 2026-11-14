@@ -88,7 +88,8 @@ F/DはSoftFloatのRISC-V specializationを使用し、ホストの`float`/`doubl
 依存ソースへ変更が必要な場合は変更箇所と理由を明示し、上流への変更と
 親リポジトリーのgitlink更新を追跡できる形にする。
 
-FPGAツールは`scripts/fpga/oss-cad-suite.lock.json`の公式リリースとSHA-256を使う。
+FPGAツールは`scripts/fpga/oss-cad-suite*.lock.json`の公式リリースとSHA-256を使う。
+既定DDR版は2026-11-12、ROM/blink/旧PHYは2026-09-22。
 HomebrewやPATH上の別バージョンと混在させない。
 ARM Mac以外でも再現できるよう、手順はMakefileまたはスクリプトとREADMEへ反映する。
 ツール本体、bitstream、テストELF、大量のログをソースとしてコミットしない。
@@ -107,6 +108,7 @@ make test-rtl                     # RTL testbench + Yosys構造・BRAM・ROM初�
 python3 scripts/rtl_test.py core core_m cache  # 対象を絞る例
 make fpga-setup                   # 固定版ツールの導入が必要な場合
 make fpga-doctor                  # 実際のツール版を確認
+make fpga-setup FPGA_BOOT=rom     # ROM/blink用の固定版
 make fpga-sim FPGA_BOOT=rom
 make fpga-sim FPGA_BOOT=ddr        # transaction-level DDRモデル
 make fpga-synth FPGA_BOOT=rom
@@ -121,8 +123,9 @@ simの公開検証基準は`riscv-tests`の`p`環境。
 `dram_memory`、`ddr_cdc`、`dram_boot`、`setsuna`。新しいRTLファイルを追加したら、
 `scripts/rtl_test.py`の明示的なソース一覧も更新する。
 
-FPGAの既定は`FPGA_BOOT=ddr`。ROM起動は明示する。
-比較用に`FPGA_ARGS='--disable-m'`、容量指定に`FPGA_ARGS='--cache-lines 128'`を使える。
+FPGAの既定は`FPGA_BOOT=ddr FPGA_PHY=gowin-ddr3`。ROM起動は明示する。
+既定の2:1 DDR版はRV64I、ROM版はRV64IM。比較には `--enable-m` / `--disable-m` を使う。
+容量指定に`FPGA_ARGS='--cache-lines 128'`を使える。
 現行CLIのキャッシュライン数は2〜256の2の累乗、ボード既定値は256ラインでI/D各2 KiB。
 容量を増やす変更ではCLI検証、index幅、文書、合成結果も更新する。
 条件比較には`--build-dir build/fpga/<比較名>`を指定して生成物を分離する。
@@ -133,9 +136,9 @@ FPGAの既定は`FPGA_BOOT=ddr`。ROM起動は明示する。
   ツール更新時は現状を再確認し、過去の制限を永久的なハードウェア制約と扱わない。
 - portable PHYは実験用。差動I/O、read capture、timingは実機検証未完了。
   transaction-level DDRモデルの成功は物理DDRの動作証明にならない。
-- CPUはROM/DDR版とも27 MHz。DDR controllerは約99.5625 MHzで動き、
+- CPUはROM/DDR版とも27 MHz。既定のDDR controllerは108 MHzで動き、
   `ddr3_command_cdc`を通す。DDRのCPU起動前には全イメージをreadback照合する。
-  `clocks.sdc`の実クロックで評価し、ROM版のFmaxをDDR版のtiming closureに流用しない。
+  選択したPHY用のSDCで実クロックを評価し、ROM版のFmaxをDDR版のtiming closureに流用しない。
 - `make fpga-export-gowin`は未改変の上流DLL/calibration付きvendor用プロジェクトを
   出力する代替経路。Gowin EDA本体は別途必要で、export成功をvendor合成成功と扱わない。
 - 成功は「RTL」「合成」「packing」「配置配線とtiming」「bitstream生成」

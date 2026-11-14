@@ -4,6 +4,15 @@
     .globl _start
 _start:
     li      x1, 0xf0000000
+    // The Dock UART is connected on the calibrated 2:1 DDR build.
+    lla     x4, greeting
+uart_byte:
+    lbu     x5, 0(x4)
+    beqz    x5, start_counter
+    sb      x5, 16(x1)
+    addi    x4, x4, 1
+    j       uart_byte
+start_counter:
     li      x2, 0
 
 display:
@@ -18,4 +27,7 @@ delay:
     nop
     j       display
 
-// demo_program_sim.hex uses the same instruction sequence with `li x3, 16`.
+greeting:
+    .asciz "Setsuna ready\r\n"
+
+// demo_program_sim.hex is the shortened LED-only test fixture.

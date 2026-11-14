@@ -1,0 +1,30 @@
+{
+  "repository": "https://github.com/YosysHQ/oss-cad-suite-build",
+  "release": "2026-11-12",
+  "assets": {
+    "darwin-arm64": {
+      "file": "oss-cad-suite-darwin-arm64-20261112.tgz",
+      "url": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-11-12/oss-cad-suite-darwin-arm64-20261112.tgz",
+      "sha256": "c55b14ff77bedc83f1cca218347c320d8d09d6b856634b071e3f977595cf79b8",
+      "size": 527053385
+    },
+    "darwin-x64": {
+      "file": "oss-cad-suite-darwin-x64-20261112.tgz",
+      "url": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-11-12/oss-cad-suite-darwin-x64-20261112.tgz",
+      "sha256": "d5c820ea9e1908b242b9273f4ea377a90ebb09310736a7f960d9be30b2a9787e",
+      "size": 509453665
+    },
+    "linux-arm64": {
+      "file": "oss-cad-suite-linux-arm64-20261112.tgz",
+      "url": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-11-12/oss-cad-suite-linux-arm64-20261112.tgz",
+      "sha256": "4212ea0ae83d347b361a333118614eb90ceedd04085584ddb18e09a0ec9bde58",
+      "size": 688480064
+    },
+    "linux-x64": {
+      "file": "oss-cad-suite-linux-x64-20261112.tgz",
+      "url": "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/2026-11-12/oss-cad-suite-linux-x64-20261112.tgz",
+      "sha256": "346499255e3e5e6e9bf67e1d378a4e6bc249abd3de3b0caf5b57604bc8ba1752",
+      "size": 750616226
+    }
+  }
+}

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Install a checksum-pinned official OSS CAD Suite binary release locally."""
+import argparse
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 LOCK = Path(__file__).with_name('oss-cad-suite.lock.json')
+DDR_LOCK = LOCK.with_name('oss-cad-suite-ddr.lock.json')
 
 
 def host_key():
@@ -36,7 +38,10 @@ def sha256(path):
 
 
 def main():
-    lock = json.loads(LOCK.read_text())
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--ddr-2to1", action="store_true")
+    args = parser.parse_args()
+    lock = json.loads((DDR_LOCK if args.ddr_2to1 else LOCK).read_text())
     key = host_key()
     asset = lock['assets'][key]
     destination = install_path(lock)
