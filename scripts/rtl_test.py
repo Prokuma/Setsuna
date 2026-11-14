@@ -143,20 +143,23 @@ def main():
         if brams < 4:
             raise SystemExit('Cache data and tags did not both map to Gowin block RAM')
         print(f'PASS: cache data and tags mapped to {brams} Gowin block RAM cells')
-    for test_name, module in [('boot_rom', 'boot_rom'), ('dram_boot', 'dram_boot_loader')]:
+    for test_name, module, filename in [('boot_rom', 'boot_rom', 'demo_program.hex'),
+                                        ('dram_boot', 'dram_boot_loader', 'demo_program.hex'),
+                                        ('dram_boot', 'dram_boot_loader', 'ddr_m_smoke.hex')]:
         if test_name not in tests:
             continue
         # RTL simulation alone did not detect overlapping zero-fill/$readmemh
         # initialization being resolved differently by Yosys.
-        image = ROOT/'fpga/tang-primer-20k/demo_program.hex'
+        image = ROOT/'fpga/tang-primer-20k'/filename
         words = [int(w, 16) for w in image.read_text().split()]
-        memory_json = (args.build_dir/(module+'-memory.json')).resolve()
+        stem = f'{module}-{image.stem}-memory'
+        memory_json = (args.build_dir/(stem+'.json')).resolve()
         memory_script = (
             f'read_verilog -sv verilog/memory/{module}.v; '
             f'chparam -set IMAGE_WORDS {len(words)} -set IMAGE_FILE {json.dumps(str(image))} {module}; '
             f'hierarchy -top {module}; proc; memory_collect; write_json ' +
             json.dumps(str(memory_json)))
-        with (args.build_dir/(module+'-memory.log')).open('w') as log:
+        with (args.build_dir/(stem+'.log')).open('w') as log:
             subprocess.run([str(yosys), '-p', memory_script], cwd=ROOT,
                            stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
         cells = json.loads(memory_json.read_text())['modules'][module]['cells']
@@ -168,7 +171,7 @@ def main():
         expected = [f'{w:064b}' for w in words] + ['0'*64] * (len(actual)-len(words))
         if actual != expected:
             raise SystemExit('Synthesized ROM initialization differs from program image/padding')
-        print(f'PASS: synthesized {module} ROM contains exact program image and zero padding')
+        print(f'PASS: Yosys {module} ROM initialization matches {filename} and zero padding')
     if 'dram_boot' in tests:
         check_board_ddr(iv, vvp, yosys, all_rtl, args.build_dir)
     print(f'PASS: {len(tests)} RTL suites, integrated top compile, and Yosys structural check')

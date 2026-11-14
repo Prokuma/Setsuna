@@ -326,6 +326,10 @@ def main():
         define_text = ' '.join(boot_defines) + ' ' if args.design == 'cpu' else ''
         if using_2to1:
             define_text += "-DSETSUNA_GOWIN_DDR3 "
+            # Preserve the hardware-verified RV64I placement. The small LUT
+            # ROM is useful for RV64IM, but congests the default RV64I build.
+            if not enable_m:
+                define_text += "-DSETSUNA_DDR_BOOT_BRAM "
         includes = 'read -incdir third_party/gowin-ddr3\n' if using_2to1 else ""
         # Yosys 0.69 re-elaborates the already-flattened top at synth_gowin's
         # final hierarchy check when a parameterized OSER8_MEM is present.  Run
@@ -399,6 +403,7 @@ def main():
                   'nextpnr_log_sha256': sha256(out / 'nextpnr.log') if using_2to1 else None,
                   'timing_json_sha256': sha256(out / 'timing.json') if using_2to1 else None,
                   'boot_readback_enabled': using_ddr,
+                  'boot_rom_forced_bram': using_2to1 and not enable_m,
                   'boot_mode': args.boot_mode, 'led_mode': args.led_mode,
                   'cache_lines': args.cache_lines if args.design == 'cpu' else None,
                   'enable_m': enable_m if args.design == 'cpu' else None,
